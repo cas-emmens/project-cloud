@@ -1,0 +1,42 @@
+---
+# playbooks/destroy-vms.yml
+# Destroys all k3s VMs for a clean redeploy
+#
+# Usage:
+#   ansible-playbook playbooks/destroy-vms.yml
+#
+# WARNING: This will destroy all VMs and their data!
+
+- name: Destroy k3s VMs on Proxmox nodes
+  hosts: proxmox_nodes
+  gather_facts: false
+  tasks:
+    - name: Check if VM exists
+      shell: "qm status {{ vm_id }} 2>/dev/null"
+      register: vm_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Stop VM if running
+      shell: "qm stop {{ vm_id }} --skiplock 1"
+      when: vm_exists.rc == 0
+      failed_when: false
+
+    - name: Wait for VM to stop
+      pause:
+        seconds: 5
+      when: vm_exists.rc == 0
+
+    - name: Destroy VM and all its disks
+      shell: "qm destroy {{ vm_id }} --purge 1 --destroy-unreferenced-disks 1"
+      when: vm_exists.rc == 0
+
+    - name: Confirm destruction
+      debug:
+        msg: "VM {{ vm_id }} ({{ vm_name }}) has been destroyed"
+      when: vm_exists.rc == 0
+
+    - name: VM did not exist
+      debug:
+        msg: "VM {{ vm_id }} ({{ vm_name }}) did not exist, nothing to destroy"
+      when: vm_exists.rc != 0

@@ -1,0 +1,16 @@
+# Secrets and credentials
+*.env
+*password*
+*secret*
+*token*
+
+# Ansible
+*.retry
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+/tmp/
+*.tar.gz

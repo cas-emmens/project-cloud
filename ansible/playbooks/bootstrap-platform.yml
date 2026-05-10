@@ -1,0 +1,537 @@
+---
+# playbooks/bootstrap-platform.yml
+# Installs all platform services on the k3s cluster via Helm
+#
+# Services: Longhorn, Gitea, Drone CI, Argo CD, Prometheus+Grafana, Semaphore
+#
+# Usage:
+#   ansible-playbook playbooks/bootstrap-platform.yml
+
+- name: Bootstrap platform services on k3s
+  hosts: k3s_server
+  become: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  vars:
+    k3s_server_ip: "10.24.36.10"
+    domain_suffix: "10.24.36.10.nip.io"
+
+    # Service NodePort assignments (for easy access without ingress controller)
+    gitea_http_port: 30080
+    gitea_ssh_port: 30022
+    drone_port: 30081
+    argocd_port: 30082
+    grafana_port: 30083
+    semaphore_port: 30084
+    alertmanager_port: 30085
+    headlamp_port: 30086
+    prometheus_port: 30090
+
+  tasks:
+    # =========================================
+    # HELM INSTALLATION
+    # =========================================
+    - name: Check if helm is installed
+      stat:
+        path: /usr/local/bin/helm
+      register: helm_binary
+
+    - name: Install Helm
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: not helm_binary.stat.exists
+
+    # =========================================
+    # NAMESPACES
+    # =========================================
+    - name: Create namespaces
+      shell: |
+        kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
+      loop:
+        - gitea
+        - drone
+        - argocd
+        - monitoring
+        - semaphore
+        - orange-kuma
+      changed_when: false
+
+    # =========================================
+    # GITEA (Repo Manager)
+    # =========================================
+    - name: Add Gitea Helm repo
+      shell: |
+        helm repo add gitea-charts https://dl.gitea.com/charts/
+        helm repo update
+      changed_when: false
+
+    - name: Install Gitea
+      shell: |
+        helm upgrade --install gitea gitea-charts/gitea \
+          --namespace gitea \
+          --set service.http.type=NodePort \
+          --set service.http.nodePort={{ gitea_http_port }} \
+          --set service.ssh.type=NodePort \
+          --set service.ssh.nodePort={{ gitea_ssh_port }} \
+          --set gitea.admin.username=gitea_admin \
+          --set gitea.admin.password=OrangeKuma2025! \
+          --set gitea.admin.email=admin@orangekuma.local \
+          --set gitea.config.server.ROOT_URL=http://{{ k3s_server_ip }}:{{ gitea_http_port }} \
+          --set gitea.config.server.SSH_PORT={{ gitea_ssh_port }} \
+          --set gitea.config.server.SSH_LISTEN_PORT=22 \
+          --set gitea.config.webhook.ALLOWED_HOST_LIST=* \
+          --set persistence.enabled=true \
+          --set persistence.size=5Gi \
+          --set persistence.storageClass=local-path \
+          --set postgresql-ha.enabled=false \
+          --set postgresql.enabled=true \
+          --set postgresql.primary.persistence.storageClass=local-path \
+          --wait --timeout 5m
+      register: gitea_install
+      changed_when: "'has been upgraded' in gitea_install.stdout or 'has been installed' in gitea_install.stdout"
+
+    - name: Wait for Gitea to be ready
+      shell: |
+        kubectl -n gitea rollout status deploy/gitea --timeout=180s
+      changed_when: false
+
+    # =========================================
+    # DRONE CI
+    # =========================================
+    - name: Create Drone OAuth app in Gitea
+      shell: |
+        # Wait for Gitea API to be responsive
+        until curl -sf http://localhost:{{ gitea_http_port }}/api/v1/version; do
+          sleep 5
+        done
+
+        # Check if OAuth app already exists
+        EXISTING=$(curl -sf -u gitea_admin:OrangeKuma2025! \
+          "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2" | \
+          python3 -c "import sys,json; apps=json.load(sys.stdin); print(next((a['client_id'] for a in apps if a['name']=='drone'), ''))" 2>/dev/null)
+
+        if [ -n "$EXISTING" ]; then
+          echo "EXISTING:$EXISTING"
+          exit 0
+        fi
+
+        # Create OAuth app
+        RESULT=$(curl -sf -X POST -u gitea_admin:OrangeKuma2025! \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "drone",
+            "redirect_uris": ["http://{{ k3s_server_ip }}:{{ drone_port }}/login"]
+          }' \
+          "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2")
+
+        CLIENT_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['client_id'])")
+        CLIENT_SECRET=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['client_secret'])")
+
+        echo "CLIENT_ID:$CLIENT_ID"
+        echo "CLIENT_SECRET:$CLIENT_SECRET"
+      register: drone_oauth
+      changed_when: false
+
+    - name: Parse Drone OAuth credentials
+      set_fact:
+        drone_client_id: "{{ drone_oauth.stdout_lines | select('match', '.*CLIENT_ID:.*') | first | regex_replace('.*CLIENT_ID:', '') | default('') }}"
+        drone_client_secret: "{{ drone_oauth.stdout_lines | select('match', '.*CLIENT_SECRET:.*') | first | regex_replace('.*CLIENT_SECRET:', '') | default('') }}"
+      when: "'CLIENT_SECRET' in drone_oauth.stdout"
+
+    - name: Parse existing Drone OAuth ID
+      set_fact:
+        drone_client_id: "{{ drone_oauth.stdout_lines | select('match', '.*EXISTING:.*') | first | regex_replace('.*EXISTING:', '') }}"
+      when: "'EXISTING' in drone_oauth.stdout"
+
+    - name: Generate Drone RPC secret
+      shell: openssl rand -hex 16
+      register: drone_rpc_secret_raw
+      changed_when: false
+
+    - name: Create Drone secret
+      shell: |
+        kubectl -n drone create secret generic drone-secrets \
+          --from-literal=DRONE_GITEA_CLIENT_ID="{{ drone_client_id }}" \
+          --from-literal=DRONE_GITEA_CLIENT_SECRET="{{ drone_client_secret | default('existing') }}" \
+          --from-literal=DRONE_RPC_SECRET="{{ drone_rpc_secret_raw.stdout }}" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+
+    - name: Deploy Drone Server
+      shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: drone-server
+          namespace: drone
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: drone-server
+          template:
+            metadata:
+              labels:
+                app: drone-server
+            spec:
+              containers:
+              - name: drone
+                image: drone/drone:2
+                ports:
+                - containerPort: 80
+                env:
+                - name: DRONE_GITEA_SERVER
+                  value: "http://gitea-http.gitea.svc:3000"
+                - name: DRONE_GITEA_CLIENT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_GITEA_CLIENT_ID
+                - name: DRONE_GITEA_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_GITEA_CLIENT_SECRET
+                - name: DRONE_RPC_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_RPC_SECRET
+                - name: DRONE_SERVER_HOST
+                  value: "{{ k3s_server_ip }}:{{ drone_port }}"
+                - name: DRONE_SERVER_PROTO
+                  value: "http"
+                - name: DRONE_USER_CREATE
+                  value: "username:gitea_admin,admin:true"
+                volumeMounts:
+                - name: data
+                  mountPath: /data
+              volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: drone-server-pvc
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: drone-server-pvc
+          namespace: drone
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 2Gi
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: drone-server
+          namespace: drone
+        spec:
+          type: NodePort
+          selector:
+            app: drone-server
+          ports:
+          - port: 80
+            targetPort: 80
+            nodePort: {{ drone_port }}
+        EOF
+
+    - name: Deploy Drone Runner
+      shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: drone-runner
+          namespace: drone
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: drone-runner
+          template:
+            metadata:
+              labels:
+                app: drone-runner
+            spec:
+              containers:
+              - name: runner
+                image: drone/drone-runner-kube:latest
+                env:
+                - name: DRONE_RPC_HOST
+                  value: "drone-server.drone.svc:80"
+                - name: DRONE_RPC_PROTO
+                  value: "http"
+                - name: DRONE_RPC_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_RPC_SECRET
+                - name: DRONE_NAMESPACE_DEFAULT
+                  value: "drone"
+              serviceAccountName: drone-runner
+        ---
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: drone-runner
+          namespace: drone
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: drone-runner
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+        - kind: ServiceAccount
+          name: drone-runner
+          namespace: drone
+        EOF
+
+    # =========================================
+    # ARGO CD
+    # =========================================
+    - name: Add Argo CD Helm repo
+      shell: |
+        helm repo add argo https://argoproj.github.io/argo-helm
+        helm repo update
+      changed_when: false
+
+    - name: Install Argo CD
+      shell: |
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace argocd \
+          --set server.service.type=NodePort \
+          --set server.service.nodePortHttp={{ argocd_port }} \
+          --set server.extraArgs[0]=--insecure \
+          --set configs.params."server\.insecure"=true \
+          --wait --timeout 5m
+      register: argocd_install
+      changed_when: "'has been upgraded' in argocd_install.stdout or 'has been installed' in argocd_install.stdout"
+
+    - name: Wait for Argo CD server to be ready
+      shell: |
+        kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
+      changed_when: false
+
+    - name: Get Argo CD initial admin password
+      shell: |
+        kubectl -n argocd get secret argocd-initial-admin-secret \
+          -o jsonpath="{.data.password}" | base64 -d
+      register: argocd_password
+      changed_when: false
+
+    # =========================================
+    # PROMETHEUS + GRAFANA (Monitoring)
+    # =========================================
+    - name: Add Prometheus community Helm repo
+      shell: |
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+      changed_when: false
+
+    - name: Install kube-prometheus-stack
+      shell: |
+        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+          --namespace monitoring \
+          --set grafana.service.type=NodePort \
+          --set grafana.service.nodePort={{ grafana_port }} \
+          --set grafana.adminPassword=OrangeKuma2025! \
+          --set grafana.persistence.enabled=true \
+          --set grafana.persistence.storageClassName=local-path \
+          --set grafana.persistence.size=2Gi \
+          --set prometheus.service.type=NodePort \
+          --set prometheus.service.nodePort={{ prometheus_port }} \
+          --set prometheus.prometheusSpec.retention=7d \
+          --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName=local-path \
+          --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=5Gi \
+          --set alertmanager.service.type=NodePort \
+          --set alertmanager.service.nodePort={{ alertmanager_port }} \
+          --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.storageClassName=local-path \
+          --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.resources.requests.storage=2Gi \
+          --wait --timeout 8m
+      register: prometheus_install
+      changed_when: "'has been upgraded' in prometheus_install.stdout or 'has been installed' in prometheus_install.stdout"
+
+    # =========================================
+    # SEMAPHORE (Ansible UI)
+    # =========================================
+    - name: Deploy Semaphore
+      shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: semaphore
+          namespace: semaphore
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: semaphore
+          template:
+            metadata:
+              labels:
+                app: semaphore
+            spec:
+              containers:
+              - name: semaphore
+                image: semaphoreui/semaphore:latest
+                ports:
+                - containerPort: 3000
+                env:
+                - name: SEMAPHORE_DB_DIALECT
+                  value: bolt
+                - name: SEMAPHORE_ADMIN_PASSWORD
+                  value: OrangeKuma2025!
+                - name: SEMAPHORE_ADMIN_NAME
+                  value: admin
+                - name: SEMAPHORE_ADMIN_EMAIL
+                  value: admin@orangekuma.local
+                - name: SEMAPHORE_ADMIN
+                  value: admin
+                - name: SEMAPHORE_ACCESS_KEY_ENCRYPTION
+                  value: "{{ lookup('password', '/dev/null length=32 chars=hexdigits') }}"
+                volumeMounts:
+                - name: data
+                  mountPath: /var/lib/semaphore
+              volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: semaphore-pvc
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: semaphore-pvc
+          namespace: semaphore
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 1Gi
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: semaphore
+          namespace: semaphore
+        spec:
+          type: NodePort
+          selector:
+            app: semaphore
+          ports:
+          - port: 3000
+            targetPort: 3000
+            nodePort: {{ semaphore_port }}
+        EOF
+
+    # =========================================
+    # HEADLAMP (Kubernetes GUI)
+    # =========================================
+    - name: Add Headlamp Helm repo
+      shell: |
+        helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+        helm repo update
+      changed_when: false
+
+    - name: Install Headlamp
+      shell: |
+        helm upgrade --install headlamp headlamp/headlamp \
+          --namespace kube-system \
+          --set service.type=NodePort \
+          --set service.nodePort={{ headlamp_port }} \
+          --set clusterRoleBinding.create=true \
+          --wait --timeout 3m
+      register: headlamp_install
+      changed_when: "'has been upgraded' in headlamp_install.stdout or 'has been installed' in headlamp_install.stdout"
+
+    - name: Create Headlamp admin service account
+      shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: headlamp-admin
+          namespace: kube-system
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: headlamp-admin
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+        - kind: ServiceAccount
+          name: headlamp-admin
+          namespace: kube-system
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: headlamp-admin-token
+          namespace: kube-system
+          annotations:
+            kubernetes.io/service-account.name: headlamp-admin
+        type: kubernetes.io/service-account-token
+        EOF
+
+    - name: Get Headlamp login token
+      shell: |
+        kubectl -n kube-system get secret headlamp-admin-token \
+          -o jsonpath="{.data.token}" | base64 -d
+      register: headlamp_token
+      changed_when: false
+
+    # =========================================
+    # SUMMARY
+    # =========================================
+    - name: Print access information
+      debug:
+        msg: |
+          ============================================
+          Platform Bootstrap Complete!
+          ============================================
+
+          Gitea:        http://{{ k3s_server_ip }}:{{ gitea_http_port }}
+                        User: gitea_admin / OrangeKuma2025!
+                        SSH:  ssh://git@{{ k3s_server_ip }}:{{ gitea_ssh_port }}
+
+          Drone CI:     http://{{ k3s_server_ip }}:{{ drone_port }}
+                        (Login via Gitea OAuth)
+
+          Argo CD:      http://{{ k3s_server_ip }}:{{ argocd_port }}
+                        User: admin / {{ argocd_password.stdout }}
+
+          Grafana:      http://{{ k3s_server_ip }}:{{ grafana_port }}
+                        User: admin / OrangeKuma2025!
+
+          Prometheus:   http://{{ k3s_server_ip }}:{{ prometheus_port }}
+          Alertmanager: http://{{ k3s_server_ip }}:{{ alertmanager_port }}
+
+          Semaphore:    http://{{ k3s_server_ip }}:{{ semaphore_port }}
+                        User: admin / OrangeKuma2025!
+
+          Headlamp:     http://{{ k3s_server_ip }}:{{ headlamp_port }}
+                        Token: {{ headlamp_token.stdout[:20] }}...
+                        (full token saved to /tmp/headlamp-token.txt)
+
+          Kubeconfig:   /tmp/kubeconfig-orange-kuma.yaml
+          ============================================
+
+    - name: Save Headlamp token to file
+      copy:
+        content: "{{ headlamp_token.stdout }}"
+        dest: /tmp/headlamp-token.txt
+        mode: "0600"
+      delegate_to: localhost
+      become: false

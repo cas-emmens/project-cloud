@@ -1,0 +1,40 @@
+---
+# playbooks/remove-customer.yml
+# Removes a customer's Orange Kuma instance
+#
+# Usage:
+#   ansible-playbook playbooks/remove-customer.yml -e customer_name=acme
+
+- name: Remove Orange Kuma customer instance
+  hosts: k3s_server
+  become: true
+  vars_prompt:
+    - name: customer_name
+      prompt: "Customer name to remove"
+      private: false
+      when: customer_name is not defined
+
+    - name: confirm
+      prompt: "Type 'yes-delete-{{ customer_name | default('UNKNOWN') }}' to confirm"
+      private: false
+
+  tasks:
+    - name: Verify confirmation
+      assert:
+        that:
+          - confirm == "yes-delete-" + customer_name
+        fail_msg: "Confirmation did not match. Aborting."
+
+    - name: Remove Argo CD application
+      shell: |
+        kubectl -n argocd delete application orange-kuma-{{ customer_name }} --ignore-not-found
+      changed_when: false
+
+    - name: Delete customer namespace (removes everything)
+      shell: |
+        kubectl delete namespace customer-{{ customer_name }} --ignore-not-found
+      register: delete_result
+
+    - name: Confirm removal
+      debug:
+        msg: "Customer '{{ customer_name }}' has been completely removed."

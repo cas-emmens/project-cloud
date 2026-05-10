@@ -1,0 +1,61 @@
+---
+all:
+  vars:
+    # Proxmox API connection
+    proxmox_host: "10.24.36.2"
+    proxmox_user: "root@pam"
+    # Set this via environment variable or ansible-vault
+    # export PROXMOX_PASSWORD=yourpassword
+    proxmox_password: "{{ lookup('env', 'PROXMOX_PASSWORD') }}"
+
+    # Network config
+    gateway: "10.24.36.1"
+    netmask: "24"
+    nameserver: "10.24.36.1"
+    bridge: "vmbr0"
+
+    # VM base image
+    base_image: "/var/lib/vz/template/iso/debian-12-generic-amd64.qcow2"
+
+    # k3s config
+    k3s_version: "v1.31.4+k3s1"
+    k3s_cluster_cidr: "10.42.0.0/16"
+    k3s_service_cidr: "10.43.0.0/16"
+
+    # SSH key for cloud-init (replace with your actual public key)
+    ssh_public_key: "{{ lookup('env', 'SSH_PUBLIC_KEY') }}"
+
+  children:
+    proxmox_nodes:
+      hosts:
+        CE01:
+          ansible_host: 10.24.36.2
+          vm_id: 300
+          vm_name: "k3s-server"
+          vm_ip: "10.24.36.10"
+        CE02:
+          ansible_host: 10.24.36.3
+          vm_id: 301
+          vm_name: "k3s-agent-1"
+          vm_ip: "10.24.36.11"
+        CE3:
+          ansible_host: 10.24.36.4
+          vm_id: 302
+          vm_name: "k3s-agent-2"
+          vm_ip: "10.24.36.12"
+
+    k3s_cluster:
+      children:
+        k3s_server:
+          hosts:
+            k3s-server:
+              ansible_host: 10.24.36.10
+              ansible_user: debian
+        k3s_agents:
+          hosts:
+            k3s-agent-1:
+              ansible_host: 10.24.36.11
+              ansible_user: debian
+            k3s-agent-2:
+              ansible_host: 10.24.36.12
+              ansible_user: debian

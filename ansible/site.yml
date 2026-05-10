@@ -1,0 +1,27 @@
+---
+# site.yml - Full greenfield deployment
+#
+# Deploys the entire Orange Kuma platform from scratch:
+#   1. Create VMs on Proxmox
+#   2. Install k3s cluster
+#   3. Bootstrap all platform services
+#
+# Usage:
+#   ansible-playbook site.yml
+#
+# For a clean redeploy:
+#   ansible-playbook playbooks/destroy-vms.yml
+#   ansible-playbook site.yml
+#
+# Prerequisites:
+#   export PROXMOX_PASSWORD="your-proxmox-password"
+#   export SSH_PUBLIC_KEY="ssh-rsa AAAA... your-key"
+
+- name: "Phase 1: Create VMs on Proxmox"
+  import_playbook: playbooks/create-vms.yml
+
+- name: "Phase 2: Install k3s cluster"
+  import_playbook: playbooks/install-k3s.yml
+
+- name: "Phase 3: Bootstrap platform services"
+  import_playbook: playbooks/bootstrap-platform.yml
