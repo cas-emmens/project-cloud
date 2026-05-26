@@ -182,7 +182,7 @@
                 - containerPort: 80
                 env:
                 - name: DRONE_GITEA_SERVER
-                  value: "http://gitea-http.gitea.svc:3000"
+                  value: "http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
                 - name: DRONE_GITEA_CLIENT_ID
                   valueFrom:
                     secretKeyRef:
