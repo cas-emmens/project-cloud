@@ -148,12 +148,34 @@
       register: drone_rpc_secret_raw
       changed_when: false
 
+    - name: Check if Drone admin token already exists
+      shell: |
+        kubectl -n drone get secret drone-secrets \
+          -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' 2>/dev/null | base64 -d
+      register: existing_drone_admin_token
+      changed_when: false
+      failed_when: false
+
+    - name: Generate Drone admin token (only if missing)
+      shell: openssl rand -hex 16
+      register: new_drone_admin_token
+      when: existing_drone_admin_token.stdout == ''
+      changed_when: false
+
+    - name: Set drone_admin_token fact
+      set_fact:
+        drone_admin_token: >-
+          {{ existing_drone_admin_token.stdout
+             if existing_drone_admin_token.stdout != ''
+             else new_drone_admin_token.stdout }}
+
     - name: Create Drone secret
       shell: |
         kubectl -n drone create secret generic drone-secrets \
           --from-literal=DRONE_GITEA_CLIENT_ID="{{ drone_client_id }}" \
           --from-literal=DRONE_GITEA_CLIENT_SECRET="{{ drone_client_secret | default('existing') }}" \
           --from-literal=DRONE_RPC_SECRET="{{ drone_rpc_secret_raw.stdout }}" \
+          --from-literal=DRONE_ADMIN_TOKEN="{{ drone_admin_token }}" \
           --dry-run=client -o yaml | kubectl apply -f -
       changed_when: false
 
@@ -202,8 +224,13 @@
                   value: "{{ k3s_server_ip }}:{{ drone_port }}"
                 - name: DRONE_SERVER_PROTO
                   value: "http"
+                - name: DRONE_ADMIN_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_ADMIN_TOKEN
                 - name: DRONE_USER_CREATE
-                  value: "username:gitea_admin,admin:true"
+                  value: "username:gitea_admin,machine:false,admin:true,token:$(DRONE_ADMIN_TOKEN)"
                 volumeMounts:
                 - name: data
                   mountPath: /data

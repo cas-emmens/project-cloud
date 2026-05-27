@@ -18,22 +18,23 @@
   become: true
   vars:
     k3s_server_ip: "10.24.36.10"
-    template_path: "../k8s/orange-kuma/customer-template.yml"
+    gitea_http_port: 30080
+    gitea_org: orange
+    template_repo: orange-uptime-kuma-management-tool
+    template_file: k8s/deployment-template.yaml
 
   vars_prompt:
     - name: customer_name
       prompt: "Customer name (lowercase, no spaces)"
       private: false
-      when: customer_name is not defined
 
     - name: customer_admin_password
       prompt: "Admin password for this customer's Orange Kuma"
       private: true
-      when: customer_admin_password is not defined
 
   tasks:
     - name: Validate customer name
-      assert:
+      ansible.builtin.assert:
         that:
           - customer_name is regex("^[a-z0-9][a-z0-9-]*[a-z0-9]$")
           - customer_name | length >= 2
@@ -41,43 +42,58 @@
         fail_msg: "Customer name must be 2-30 chars, lowercase alphanumeric and hyphens only"
 
     - name: Check if customer namespace already exists
-      shell: kubectl get namespace customer-{{ customer_name }} 2>/dev/null
+      ansible.builtin.shell: kubectl get namespace customer-{{ customer_name }} 2>/dev/null
       register: ns_check
       failed_when: false
       changed_when: false
 
     - name: Fail if customer already exists
-      fail:
+      ansible.builtin.fail:
         msg: "Customer '{{ customer_name }}' already exists! Use the update playbook instead."
       when: ns_check.rc == 0
 
     - name: Label the monitoring namespace (needed for NetworkPolicy)
-      shell: |
+      ansible.builtin.shell: |
         kubectl label namespace monitoring kubernetes.io/metadata.name=monitoring --overwrite
       changed_when: false
 
-    - name: Generate customer manifests from template
-      shell: |
+    - name: Fetch deployment template from Gitea
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ template_repo }}/raw/{{ template_file }}?ref=main"
+        url_username: "{{ gitea_admin_user | default('gitea_admin') }}"
+        url_password: "{{ gitea_admin_password | default('OrangeKuma2025!') }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: 200
+      register: template_content
+      failed_when: template_content.status != 200
+
+    - name: Write template to temp file
+      ansible.builtin.copy:
+        content: "{{ template_content.content }}"
+        dest: "/tmp/customer-{{ customer_name }}-manifest.yml"
+        mode: "0600"
+
+    - name: Apply customer manifests from template
+      ansible.builtin.shell: |
         sed 's/{{ '{{' }} CUSTOMER_NAME {{ '}}' }}/{{ customer_name }}/g' \
-          {{ template_path }} | kubectl apply -f -
-      args:
-        chdir: "{{ playbook_dir }}"
+          /tmp/customer-{{ customer_name }}-manifest.yml | kubectl apply -f -
       register: deploy_result
 
     - name: Wait for Orange Kuma to be ready
-      shell: |
+      ansible.builtin.shell: |
         kubectl -n customer-{{ customer_name }} rollout status deploy/orange-kuma --timeout=120s
       changed_when: false
 
     - name: Get assigned NodePort
-      shell: |
+      ansible.builtin.shell: |
         kubectl -n customer-{{ customer_name }} get svc orange-kuma \
           -o jsonpath='{.spec.ports[0].nodePort}'
       register: node_port
       changed_when: false
 
     - name: Wait for Orange Kuma to respond
-      uri:
+      ansible.builtin.uri:
         url: "http://{{ k3s_server_ip }}:{{ node_port.stdout }}/"
         status_code: 200
       retries: 12
@@ -86,7 +102,7 @@
       until: health_check.status == 200
 
     - name: Setup admin account via API
-      uri:
+      ansible.builtin.uri:
         url: "http://{{ k3s_server_ip }}:{{ node_port.stdout }}/api/setup"
         method: POST
         body_format: json
@@ -98,7 +114,7 @@
       failed_when: false
 
     - name: Print customer access details
-      debug:
+      ansible.builtin.debug:
         msg: |
           ============================================
           Customer '{{ customer_name }}' provisioned!
@@ -111,14 +127,13 @@
           Namespace: customer-{{ customer_name }}
           ============================================
 
----
 # Also add to Argo CD for GitOps management
 - name: Register customer in Argo CD
   hosts: k3s_server
   become: true
   tasks:
     - name: Create Argo CD Application for customer
-      shell: |
+      ansible.builtin.shell: |
         cat <<EOF | kubectl apply -f -
         apiVersion: argoproj.io/v1alpha1
         kind: Application
