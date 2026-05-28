@@ -299,13 +299,82 @@
       delay: 5
       until: drone_health_post_restart.status == 200
 
-    - name: Sync Drone repo list from Gitea
+    # Drone's /api/user/repos?flush=true sync silently fails when triggered
+    # via the API (it requires the interactive OAuth browser session).
+    # As a workaround, fetch each repo's metadata from Gitea and INSERT
+    # directly into Drone's repos table. The activation API will then
+    # find the rows and complete activation + webhook creation normally.
+
+    - name: Fetch repo metadata from Gitea for direct DB insert
       ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/user/repos?flush=true"
-        headers:
-          Authorization: "Bearer {{ drone_admin_token }}"
-        status_code: [200, 201]
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}"
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: [200]
+      register: gitea_repo_details
+      loop: "{{ repos }}"
+
+    - name: Ensure sqlite3 is available in Drone pod (lost on restart)
+      ansible.builtin.shell: |
+        DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
+          -o jsonpath='{.items[0].metadata.name}')
+        kubectl -n drone exec "$DRONE_POD" -- \
+          sh -c 'command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1'
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Get Drone admin user_id from database
+      ansible.builtin.shell: |
+        DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
+          -o jsonpath='{.items[0].metadata.name}')
+        kubectl -n drone exec "$DRONE_POD" -- \
+          sqlite3 /data/database.sqlite \
+          "SELECT user_id FROM users WHERE user_login='{{ gitea_admin_user }}'"
+      register: drone_user_id_query
       changed_when: false
+
+    - name: Insert each repo directly into Drone's repos table
+      ansible.builtin.shell: |
+        DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
+          -o jsonpath='{.items[0].metadata.name}')
+        SIGNER=$(openssl rand -hex 16)
+        SECRET=$(openssl rand -hex 16)
+        NOW=$(date +%s)
+        kubectl -n drone exec "$DRONE_POD" -- sqlite3 /data/database.sqlite "
+        INSERT OR REPLACE INTO repos (
+          repo_uid, repo_user_id, repo_namespace, repo_name, repo_slug,
+          repo_scm, repo_clone_url, repo_ssh_url, repo_html_url,
+          repo_active, repo_private, repo_visibility, repo_branch,
+          repo_counter, repo_config, repo_timeout, repo_trusted, repo_protected,
+          repo_synced, repo_created, repo_updated, repo_version,
+          repo_signer, repo_secret,
+          repo_no_forks, repo_no_pulls, repo_cancel_pulls, repo_cancel_push,
+          repo_throttle, repo_cancel_running
+        ) VALUES (
+          '{{ item.json.id }}', {{ drone_user_id_query.stdout | int }},
+          '{{ gitea_org }}', '{{ item.json.name }}',
+          '{{ gitea_org }}/{{ item.json.name }}',
+          'git',
+          '{{ item.json.clone_url }}',
+          '{{ item.json.ssh_url }}',
+          '{{ item.json.html_url }}',
+          0, {{ 1 if item.json.private else 0 }},
+          '{{ "private" if item.json.private else "public" }}',
+          '{{ item.json.default_branch }}',
+          0, '.drone.yml', 60, 0, 0,
+          $NOW, $NOW, $NOW, 1,
+          '$SIGNER', '$SECRET',
+          0, 0, 0, 0, 0, 0
+        );
+        "
+      args:
+        executable: /bin/bash
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      changed_when: true
 
     - name: Activate repositories in Drone CI
       ansible.builtin.uri:
