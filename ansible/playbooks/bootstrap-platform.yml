@@ -100,12 +100,13 @@
           exit 0
         fi
 
-        # Create OAuth app
+        # Create OAuth app (confidential_client=true required: Drone does not support PKCE)
         RESULT=$(curl -sf -X POST -u {{ gitea_admin_user }}:{{ gitea_admin_password }} \
           -H "Content-Type: application/json" \
           -d '{
             "name": "drone",
-            "redirect_uris": ["http://{{ k3s_server_ip }}/login"]
+            "redirect_uris": ["http://{{ k3s_server_ip }}/login"],
+            "confidential_client": true
           }' \
           "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2")
 
