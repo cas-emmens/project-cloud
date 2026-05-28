@@ -56,10 +56,10 @@
   tasks:
     - name: Wait for network and DNS to be ready
       shell: |
-        until curl -sf --max-time 5 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
+        until curl -sf --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
+          sleep 10
         done
-      timeout: 120
+      timeout: 300
       changed_when: false
 
     - name: Check if k3s is already installed
@@ -125,10 +125,10 @@
 
     - name: Wait for network and DNS to be ready
       shell: |
-        until curl -sf --max-time 5 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
+        until curl -sf --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
+          sleep 10
         done
-      timeout: 120
+      timeout: 300
       changed_when: false
 
     - name: Check if k3s is already installed
