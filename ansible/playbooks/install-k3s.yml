@@ -49,6 +49,12 @@
         - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
         - { key: "net.ipv4.ip_forward", value: "1" }
 
+    - name: Ensure systemd-resolved drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
     - name: Ensure fallback DNS is configured via systemd-resolved
       ansible.builtin.copy:
         dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
