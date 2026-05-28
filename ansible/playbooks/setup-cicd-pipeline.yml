@@ -175,26 +175,6 @@
           Gitea organisatie '{{ gitea_org }}':
           {{ 'aangemaakt' if org_check.status == 404 else 'bestaat al' }}.
 
-    - name: Set Gitea registry credentials as Drone org secrets
-      ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/orgsecrets/{{ gitea_org }}"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ drone_admin_token }}"
-        body_format: json
-        body:
-          name: "{{ item.name }}"
-          data: "{{ item.value }}"
-          pull_request: false
-        status_code: [200, 201, 409]
-      loop:
-        - { name: "GITEA_REGISTRY",     value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
-        - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
-        - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
-        - { name: "KUMA_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
-        - { name: "MGMT_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
-      changed_when: false
-
     - name: Check if repositories exist in Gitea
       ansible.builtin.uri:
         url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}"
@@ -275,6 +255,26 @@
           Drone CI repo '{{ item.item.name }}':
           {{ 'geactiveerd' if item.status == 200 else 'was al actief' }}.
       loop: "{{ drone_activate.results }}"
+
+    - name: Set Gitea registry credentials as Drone org secrets
+      ansible.builtin.uri:
+        url: "http://localhost:{{ drone_port }}/api/orgsecrets/{{ gitea_org }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ drone_admin_token }}"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          data: "{{ item.value }}"
+          pull_request: false
+        status_code: [200, 201, 409]
+      loop:
+        - { name: "GITEA_REGISTRY",     value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
+        - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
+        - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
+        - { name: "KUMA_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
+        - { name: "MGMT_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
+      changed_when: false
 
     - name: Trigger first build for each repository
       ansible.builtin.uri:
