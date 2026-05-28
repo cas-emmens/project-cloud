@@ -284,6 +284,21 @@
         executable: /bin/bash
       changed_when: true
 
+    - name: Restart Drone server to clear in-memory user cache
+      ansible.builtin.shell: |
+        kubectl -n drone rollout restart deploy/drone-server
+        kubectl -n drone rollout status deploy/drone-server --timeout=120s
+      changed_when: true
+
+    - name: Wait for Drone to be responsive again after restart
+      ansible.builtin.uri:
+        url: "http://localhost:{{ drone_port }}/healthz"
+        status_code: 200
+      register: drone_health_post_restart
+      retries: 30
+      delay: 5
+      until: drone_health_post_restart.status == 200
+
     - name: Sync Drone repo list from Gitea
       ansible.builtin.uri:
         url: "http://localhost:{{ drone_port }}/api/user/repos?flush=true"
