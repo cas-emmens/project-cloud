@@ -305,6 +305,66 @@
         - kind: ServiceAccount
           name: drone-runner
           namespace: drone
+        ---
+        # drone-runner-docker handles `kind: pipeline, type: docker` jobs
+        # (drone-runner-kube above only handles type: kubernetes). The
+        # imported repos' .drone.yml files use type: docker + plugins/docker
+        # for image builds, which need a real Docker daemon — provided by
+        # the dind sidecar in this pod.
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: drone-runner-docker
+          namespace: drone
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: drone-runner-docker
+          template:
+            metadata:
+              labels:
+                app: drone-runner-docker
+            spec:
+              enableServiceLinks: false
+              containers:
+              - name: dind
+                image: docker:24-dind
+                securityContext:
+                  privileged: true
+                env:
+                - name: DOCKER_TLS_CERTDIR
+                  value: ""
+                args:
+                  - "--host=tcp://0.0.0.0:2375"
+                  - "--tls=false"
+                  - "--insecure-registry={{ k3s_server_ip }}:{{ gitea_http_port }}"
+                volumeMounts:
+                - name: docker-storage
+                  mountPath: /var/lib/docker
+              - name: runner
+                image: drone/drone-runner-docker:1
+                env:
+                - name: DRONE_RPC_HOST
+                  value: "drone-server.drone.svc:80"
+                - name: DRONE_RPC_PROTO
+                  value: "http"
+                - name: DRONE_RPC_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: drone-secrets
+                      key: DRONE_RPC_SECRET
+                - name: DOCKER_HOST
+                  value: "tcp://localhost:2375"
+                - name: DRONE_RUNNER_CAPACITY
+                  value: "2"
+                - name: DRONE_RUNNER_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+              volumes:
+              - name: docker-storage
+                emptyDir: {}
         EOF
 
     # =========================================
