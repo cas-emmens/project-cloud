@@ -54,6 +54,14 @@
   hosts: k3s_server
   become: true
   tasks:
+    - name: Wait for network and DNS to be ready
+      shell: |
+        until curl -sf --max-time 5 https://get.k3s.io > /dev/null 2>&1; do
+          sleep 5
+        done
+      timeout: 120
+      changed_when: false
+
     - name: Check if k3s is already installed
       stat:
         path: /usr/local/bin/k3s
@@ -114,6 +122,14 @@
     - name: Get token from server
       set_fact:
         k3s_node_token: "{{ hostvars['k3s-server']['k3s_node_token'] }}"
+
+    - name: Wait for network and DNS to be ready
+      shell: |
+        until curl -sf --max-time 5 https://get.k3s.io > /dev/null 2>&1; do
+          sleep 5
+        done
+      timeout: 120
+      changed_when: false
 
     - name: Check if k3s is already installed
       stat:
