@@ -254,63 +254,10 @@
     - name: Deploy Drone Runner
       shell: |
         cat <<'EOF' | kubectl apply -f -
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: drone-runner
-          namespace: drone
-        spec:
-          replicas: 1
-          selector:
-            matchLabels:
-              app: drone-runner
-          template:
-            metadata:
-              labels:
-                app: drone-runner
-            spec:
-              enableServiceLinks: false
-              containers:
-              - name: runner
-                image: drone/drone-runner-kube:latest
-                env:
-                - name: DRONE_RPC_HOST
-                  value: "drone-server.drone.svc:80"
-                - name: DRONE_RPC_PROTO
-                  value: "http"
-                - name: DRONE_RPC_SECRET
-                  valueFrom:
-                    secretKeyRef:
-                      name: drone-secrets
-                      key: DRONE_RPC_SECRET
-                - name: DRONE_NAMESPACE_DEFAULT
-                  value: "drone"
-              serviceAccountName: drone-runner
-        ---
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: drone-runner
-          namespace: drone
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: drone-runner
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: cluster-admin
-        subjects:
-        - kind: ServiceAccount
-          name: drone-runner
-          namespace: drone
-        ---
-        # drone-runner-docker handles `kind: pipeline, type: docker` jobs
-        # (drone-runner-kube above only handles type: kubernetes). The
-        # imported repos' .drone.yml files use type: docker + plugins/docker
-        # for image builds, which need a real Docker daemon — provided by
-        # the dind sidecar in this pod.
+        # drone-runner-docker handles `kind: pipeline, type: docker` jobs,
+        # which is what all imported repos' .drone.yml files use (plugins/
+        # docker for image builds). A privileged Docker-in-Docker sidecar
+        # provides the Docker daemon the runner connects to.
         apiVersion: apps/v1
         kind: Deployment
         metadata:
