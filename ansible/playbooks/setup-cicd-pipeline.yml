@@ -422,36 +422,81 @@
           - { name: "MGMT_IMAGE_REPO",         value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
       changed_when: false
 
-    - name: Trigger first build for each repository
+    # Drone's POST /api/repos/.../builds creates a build with event=custom,
+    # which gets skipped by any pipeline that has trigger.event: [push].
+    # Triggering via a real Gitea push event fires the webhook with
+    # event=push, which the pipelines accept. Both .drone.yml files in
+    # these repos use branch: main, so we push to main regardless of the
+    # repo's actual default branch.
+
+    - name: Ensure main branch exists in each repo (created from default)
       ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.name }}/builds"
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.json.name }}/branches"
         method: POST
-        headers:
-          Authorization: "Bearer {{ drone_admin_token }}"
-          Content-Type: "application/json"
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
         body_format: json
         body:
-          branch: "{{ item.default_branch }}"
-        status_code: [200, 201]
-      loop: "{{ repos }}"
-      register: build_triggers
-      failed_when: false
+          new_branch_name: "main"
+          old_branch_name: "{{ item.json.default_branch }}"
+        status_code: [201, 409]
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+      changed_when: false
 
-    - name: Store build numbers
+    - name: Commit trigger file to main to fire build webhook
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.json.name }}/contents/.deploy-trigger-{{ ansible_date_time.epoch }}"
+        method: POST
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          message: "chore: trigger initial CI build"
+          content: "{{ ('deploy ' ~ ansible_date_time.iso8601) | b64encode }}"
+          branch: "main"
+        status_code: [201]
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+
+    - name: Wait for build to appear in Drone for each repo
+      ansible.builtin.uri:
+        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds"
+        headers:
+          Authorization: "Bearer {{ drone_admin_token }}"
+        status_code: [200]
+      register: build_list_results
+      retries: 12
+      delay: 5
+      until: build_list_results.json | length > 0
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
+      changed_when: false
+
+    - name: Store build numbers (most recent build per repo)
       ansible.builtin.set_fact:
         build_numbers: >-
           {{ build_numbers | default({})
-             | combine({item.item.name: item.json.number}) }}
-      loop: "{{ build_triggers.results }}"
+             | combine({item.item.json.name: item.json[0].number}) }}
+      loop: "{{ build_list_results.results }}"
+      loop_control:
+        label: "{{ item.item.json.name }}"
 
     - name: Log triggered builds
       ansible.builtin.debug:
-        msg: "Build #{{ build_numbers[item.name] }} getriggerd voor '{{ item.name }}'."
-      loop: "{{ repos }}"
+        msg: "Build #{{ build_numbers[item.json.name] }} getriggerd voor '{{ item.json.name }}'."
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
 
     - name: Wait for builds to complete (max 30 min per build)
       ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.name }}/builds/{{ build_numbers[item.name] }}"
+        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds/{{ build_numbers[item.json.name] }}"
         headers:
           Authorization: "Bearer {{ drone_admin_token }}"
         status_code: 200
@@ -459,22 +504,28 @@
       until: build_status.json.status in ['success', 'failure', 'error', 'killed']
       retries: 60
       delay: 30
-      loop: "{{ repos }}"
+      loop: "{{ gitea_repo_details.results }}"
+      loop_control:
+        label: "{{ item.json.name }}"
       changed_when: false
 
     - name: Fail if any build did not succeed
       ansible.builtin.fail:
         msg: >
-          Build #{{ build_numbers[item.item.name] }} voor '{{ item.item.name }}'
+          Build #{{ build_numbers[item.item.json.name] }} voor '{{ item.item.json.name }}'
           is mislukt met status: {{ item.json.status }}.
-          Controleer de Drone CI logs op http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}/{{ item.item.name }}.
+          Controleer de Drone CI logs op http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}/{{ item.item.json.name }}.
       loop: "{{ build_status.results }}"
+      loop_control:
+        label: "{{ item.item.json.name }}"
       when: item.json.status != 'success'
 
     - name: Log successful builds
       ansible.builtin.debug:
-        msg: "Build #{{ build_numbers[item.item.name] }} voor '{{ item.item.name }}' succesvol afgerond."
+        msg: "Build #{{ build_numbers[item.item.json.name] }} voor '{{ item.item.json.name }}' succesvol afgerond."
       loop: "{{ build_status.results }}"
+      loop_control:
+        label: "{{ item.item.json.name }}"
 
     - name: Copy management tool manifest to server
       ansible.builtin.copy:
