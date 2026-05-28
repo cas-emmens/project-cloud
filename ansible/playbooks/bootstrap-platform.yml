@@ -105,7 +105,7 @@
           -H "Content-Type: application/json" \
           -d '{
             "name": "drone",
-            "redirect_uris": ["http://{{ k3s_server_ip }}:{{ drone_port }}/login"]
+            "redirect_uris": ["http://{{ k3s_server_ip }}/login"]
           }' \
           "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2")
 
