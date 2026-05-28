@@ -10,7 +10,7 @@ domain_suffix: "10.24.36.10.nip.io"
 # ─── Service NodePort-toewijzingen ────────────────────────────────────────────
 gitea_http_port: 30080
 gitea_ssh_port: 30022
-drone_port: 30081
+drone_port: 80
 argocd_port: 30082
 grafana_port: 30083
 semaphore_port: 30084

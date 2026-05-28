@@ -184,7 +184,7 @@
             spec:
               containers:
               - name: drone
-                image: drone/drone:2
+                image: drone/drone:2.20.0
                 ports:
                 - containerPort: 80
                 env:
@@ -206,7 +206,7 @@
                       name: drone-secrets
                       key: DRONE_RPC_SECRET
                 - name: DRONE_SERVER_HOST
-                  value: "{{ k3s_server_ip }}:{{ drone_port }}"
+                  value: "{{ k3s_server_ip }}"
                 - name: DRONE_SERVER_PROTO
                   value: "http"
                 - name: DRONE_ADMIN_TOKEN
@@ -242,13 +242,12 @@
           name: drone-server
           namespace: drone
         spec:
-          type: NodePort
+          type: LoadBalancer
           selector:
             app: drone-server
           ports:
           - port: 80
             targetPort: 80
-            nodePort: {{ drone_port }}
         EOF
 
     - name: Deploy Drone Runner
