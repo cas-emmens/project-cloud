@@ -79,7 +79,7 @@ data:
   ARGOCD_URL: "http://10.24.36.10:30082"
   # Image dat de management tool uitrolt voor klant-Orange Kuma instanties
   KUMA_IMAGE: "10.24.36.10:30080/orange/orange-uptime-kuma:latest"
-  K8S_NAMESPACE: "default"
+  K8S_NAMESPACE: "orange-kuma"
 
 ---
 apiVersion: apps/v1
