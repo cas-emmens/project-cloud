@@ -279,7 +279,7 @@
           sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1"
         kubectl -n drone exec "$DRONE_POD" -- \
           sqlite3 /data/database.sqlite \
-          "UPDATE users SET user_token='${GITEA_TOKEN}' WHERE user_login='${GITEA_USER}'"
+          "UPDATE users SET user_oauth_token='${GITEA_TOKEN}' WHERE user_login='${GITEA_USER}'"
       args:
         executable: /bin/bash
       changed_when: true
