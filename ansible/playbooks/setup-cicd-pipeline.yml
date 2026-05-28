@@ -519,12 +519,18 @@
         label: "{{ item.json.name }}"
       changed_when: false
 
-    - name: Fail if any build did not succeed
-      ansible.builtin.fail:
+    # We log build failures as warnings but do NOT fail the playbook.
+    # The management tool deployment depends on its own image; if any
+    # upstream repo build fails (e.g. due to a Dockerfile bug in that
+    # repo), the deployment step below will surface a clear error
+    # when it cannot pull the image. Failing a third-party build
+    # should not block the rest of the platform from coming up.
+    - name: Warn about builds that did not succeed
+      ansible.builtin.debug:
         msg: >
-          Build #{{ build_numbers[item.item.json.name] }} voor '{{ item.item.json.name }}'
-          is mislukt met status: {{ item.json.status }}.
-          Controleer de Drone CI logs op http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}/{{ item.item.json.name }}.
+          WAARSCHUWING: Build #{{ build_numbers[item.item.json.name] }} voor
+          '{{ item.item.json.name }}' eindigde met status '{{ item.json.status }}'.
+          Logs: http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}/{{ item.item.json.name }}
       loop: "{{ build_status.results }}"
       loop_control:
         label: "{{ item.item.json.name }}"
@@ -536,6 +542,7 @@
       loop: "{{ build_status.results }}"
       loop_control:
         label: "{{ item.item.json.name }}"
+      when: item.json.status == 'success'
 
     - name: Copy management tool manifest to server
       ansible.builtin.copy:
