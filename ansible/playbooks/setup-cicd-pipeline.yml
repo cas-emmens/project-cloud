@@ -82,6 +82,10 @@
       - name: orange-uptime-kuma-management-tool
         github_url: https://github.com/danielpastoor/orange-uptime-kuma-management-tool
         default_branch: main
+    # Gitea kan een bestaande normale repository niet achteraf naar een
+    # pull mirror omzetten; phase 4 herstelt die foutieve imports daarom
+    # door ze opnieuw te migreren als mirror.
+    recreate_imported_repos_as_mirrors: true
     management_tool_repo: orange-uptime-kuma-management-tool
     management_tool_image: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool:latest"
 
@@ -185,7 +189,34 @@
       register: repo_checks
       loop: "{{ repos }}"
 
-    - name: Import repositories from GitHub to Gitea
+    - name: Fail if existing repositories are not mirrors and recreation is disabled
+      ansible.builtin.fail:
+        msg: >
+          Repository '{{ item.item.name }}' bestaat al in Gitea, maar is geen
+          pull mirror. Gitea kan bestaande repositories niet omzetten naar
+          pull mirrors; verwijder de repository of zet
+          recreate_imported_repos_as_mirrors=true.
+      loop: "{{ repo_checks.results }}"
+      when:
+        - item.status == 200
+        - not (item.json.mirror | default(false) | bool)
+        - not (recreate_imported_repos_as_mirrors | bool)
+
+    - name: Remove existing non-mirror repositories before mirror migration
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.item.name }}"
+        method: DELETE
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ repo_checks.results }}"
+      when:
+        - item.status == 200
+        - not (item.json.mirror | default(false) | bool)
+        - recreate_imported_repos_as_mirrors | bool
+
+    - name: Import repository mirrors from GitHub to Gitea
       ansible.builtin.uri:
         url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/migrate"
         method: POST
@@ -197,9 +228,9 @@
           clone_addr: "{{ item.item.github_url }}"
           repo_name: "{{ item.item.name }}"
           repo_owner: "{{ gitea_org }}"
-          mirror: false
+          mirror: true
           private: false
-          description: "Imported from {{ item.item.github_url }}"
+          description: "Mirrored from {{ item.item.github_url }}"
           wiki: false
           milestones: false
           labels: false
@@ -208,7 +239,13 @@
           releases: false
         status_code: 201
       loop: "{{ repo_checks.results }}"
-      when: item.status == 404
+      when: >
+        item.status == 404 or
+        (
+          item.status == 200 and
+          not (item.json.mirror | default(false) | bool) and
+          recreate_imported_repos_as_mirrors | bool
+        )
       register: repo_imports
 
     - name: Wait for repositories to be available (migration is async)
@@ -225,9 +262,17 @@
       loop: "{{ repos }}"
       changed_when: false
 
+    - name: Verify repositories are configured as Gitea mirrors
+      ansible.builtin.fail:
+        msg: >
+          Repository '{{ item.item.name }}' is beschikbaar, maar Gitea meldt
+          mirror=false. De repository moet als pull mirror zijn gemigreerd.
+      loop: "{{ repo_ready_check.results }}"
+      when: not (item.json.mirror | default(false) | bool)
+
     - name: Log repository status
       ansible.builtin.debug:
-        msg: "Repository '{{ item.item.name }}': beschikbaar in Gitea."
+        msg: "Repository '{{ item.item.name }}': beschikbaar als Gitea mirror."
       loop: "{{ repo_ready_check.results }}"
 
     - name: List existing Gitea tokens for admin user
@@ -433,45 +478,61 @@
       changed_when: false
 
     # Drone's POST /api/repos/.../builds creates a build with event=custom,
-    # which gets skipped by any pipeline that has trigger.event: [push].
-    # Triggering via a real Gitea push event fires the webhook with
-    # event=push, which the pipelines accept. Both .drone.yml files in
-    # these repos use branch: main, so we push to main regardless of the
-    # repo's actual default branch.
-
-    - name: Ensure main branch exists in each repo (created from default)
+    # which gets skipped by pipelines that only accept push events. These
+    # repositories are Gitea pull mirrors, so we trigger Drone through the
+    # Gitea webhook test endpoint instead of writing a trigger commit.
+    - name: Get existing Drone builds before triggering mirror webhooks
       ansible.builtin.uri:
-        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.json.name }}/branches"
-        method: POST
-        url_username: "{{ gitea_admin_user }}"
-        url_password: "{{ gitea_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          new_branch_name: "main"
-          old_branch_name: "{{ item.json.default_branch }}"
-        status_code: [201, 409]
+        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds"
+        headers:
+          Authorization: "Bearer {{ drone_admin_token }}"
+        status_code: [200]
+      register: build_list_before_trigger
       loop: "{{ gitea_repo_details.results }}"
       loop_control:
         label: "{{ item.json.name }}"
       changed_when: false
 
-    - name: Commit trigger file to main to fire build webhook
+    - name: Store previous build numbers
+      ansible.builtin.set_fact:
+        previous_build_numbers: >-
+          {{ previous_build_numbers | default({})
+             | combine({
+                 item.item.json.name: (item.json[0].number if (item.json | length > 0) else 0)
+               }) }}
+      loop: "{{ build_list_before_trigger.results }}"
+      loop_control:
+        label: "{{ item.item.json.name }}"
+
+    - name: List Gitea hooks for Drone repositories
       ansible.builtin.uri:
-        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.json.name }}/contents/.deploy-trigger-{{ ansible_date_time.epoch }}"
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}/hooks"
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: [200]
+      register: gitea_repo_hooks
+      retries: 12
+      delay: 5
+      until: gitea_repo_hooks.json | length > 0
+      loop: "{{ repos }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Trigger Drone builds through Gitea webhook tests
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.0.item.name }}/hooks/{{ item.1.id }}/tests"
         method: POST
         url_username: "{{ gitea_admin_user }}"
         url_password: "{{ gitea_admin_password }}"
         force_basic_auth: true
-        body_format: json
-        body:
-          message: "chore: trigger initial CI build"
-          content: "{{ ('deploy ' ~ ansible_date_time.iso8601) | b64encode }}"
-          branch: "main"
-        status_code: [201]
-      loop: "{{ gitea_repo_details.results }}"
+        status_code: [200, 204]
+      loop: "{{ gitea_repo_hooks.results | subelements('json') }}"
       loop_control:
-        label: "{{ item.json.name }}"
+        label: "{{ item.0.item.name }} / hook {{ item.1.id }}"
+      when:
+        - "'/hook' in (item.1.config.url | default(''))"
 
     - name: Wait for build to appear in Drone for each repo
       ansible.builtin.uri:
@@ -482,7 +543,10 @@
       register: build_list_results
       retries: 12
       delay: 5
-      until: build_list_results.json | length > 0
+      until: >
+        build_list_results.json | length > 0 and
+        (build_list_results.json[0].number | int) >
+        (previous_build_numbers[item.json.name] | default(0) | int)
       loop: "{{ gitea_repo_details.results }}"
       loop_control:
         label: "{{ item.json.name }}"
@@ -511,7 +575,7 @@
           Authorization: "Bearer {{ drone_admin_token }}"
         status_code: 200
       register: build_status
-      until: build_status.json.status in ['success', 'failure', 'error', 'killed']
+      until: build_status.json.status in ['success', 'failure', 'error', 'killed', 'skipped']
       retries: 60
       delay: 30
       loop: "{{ gitea_repo_details.results }}"
