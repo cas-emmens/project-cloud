@@ -19,6 +19,12 @@
   hosts: k3s_server:k3s_agents
   become: true
   tasks:
+    - name: Ensure /etc/rancher/k3s directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
     - name: Configure containerd insecure registry for Gitea
       ansible.builtin.copy:
         dest: /etc/rancher/k3s/registries.yaml
@@ -121,6 +127,8 @@
         set -o pipefail
         kubectl -n drone get secret drone-secrets \
           -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' | base64 -d
+      args:
+        executable: /bin/bash
       register: drone_token_raw
       changed_when: false
       failed_when: drone_token_raw.stdout == ''
