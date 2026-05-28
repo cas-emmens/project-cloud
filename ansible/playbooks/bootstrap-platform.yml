@@ -269,6 +269,7 @@
               labels:
                 app: drone-runner
             spec:
+              enableServiceLinks: false
               containers:
               - name: runner
                 image: drone/drone-runner-kube:latest

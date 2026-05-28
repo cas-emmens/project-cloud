@@ -299,6 +299,16 @@
       delay: 5
       until: drone_health_post_restart.status == 200
 
+    # The runner connects to drone-server via the Kubernetes service.
+    # When drone-server is restarted, the runner's persistent RPC
+    # connection breaks and it stops picking up new builds. Restart
+    # the runner so it reconnects to the fresh drone-server pod.
+    - name: Restart Drone runner to reconnect to fresh drone-server
+      ansible.builtin.shell: |
+        kubectl -n drone rollout restart deploy/drone-runner
+        kubectl -n drone rollout status deploy/drone-runner --timeout=120s
+      changed_when: true
+
     # Drone's /api/user/repos?flush=true sync silently fails when triggered
     # via the API (it requires the interactive OAuth browser session).
     # As a workaround, fetch each repo's metadata from Gitea and INSERT
