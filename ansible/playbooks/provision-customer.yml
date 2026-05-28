@@ -1,0 +1,116 @@
+---
+# playbooks/provision-customer.yml
+# Provision an Orange Kuma instance for a new customer via GitOps.
+#
+# This playbook is the shared backend for both Semaphore templates:
+#   - "Nieuwe klant aanmaken"   (sales) commits to customer-instances
+#   - "Testklant aanmaken"      (ops)   commits to test-customers
+# Argo CD reconciles whichever repo the manifest lands in.
+#
+# The playbook itself never touches the Kubernetes API. It just renders
+# a manifest from the Jinja template at templates/customer-instance.yml.j2
+# and commits it (PUT or POST) to a Gitea repo using the admin
+# credentials. Argo CD does the actual cluster work.
+#
+# Usage (manual / ad-hoc):
+#   ansible-playbook playbooks/provision-customer.yml \
+#     -e customer_name=acme \
+#     -e customer_email=admin@acme.example \
+#     -e admin_password=ChangeMe123 \
+#     -e target_repo=test-customers
+#
+# Runs from the same host that runs the rest of phase 3/4 (the
+# k3s_server VM has localhost access to Gitea on port 30080).
+
+- name: Provision customer Uptime Kuma instance (GitOps)
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+
+  vars:
+    # Default the lane to "sales" so a forgotten -e still goes to the
+    # production audit stream rather than silently into a test repo.
+    target_repo: customer-instances
+    provisioned_by: "{{ 'sales' if target_repo == 'customer-instances' else 'ops' }}"
+    manifest_path: "customers/{{ customer_name }}.yaml"
+
+  tasks:
+    - name: Validate required variables are set
+      ansible.builtin.assert:
+        that:
+          - customer_name is defined and customer_name | length > 0
+          - customer_email is defined and customer_email | length > 0
+          - admin_password is defined and admin_password | length > 0
+        fail_msg: >
+          customer_name, customer_email and admin_password must all be
+          supplied (via -e or Semaphore survey vars).
+
+    - name: Validate customer_name is a clean slug
+      ansible.builtin.assert:
+        that:
+          - customer_name is match('^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$')
+        fail_msg: >
+          customer_name must be lowercase letters, digits, and dashes
+          only, 3-32 characters, not starting or ending with a dash.
+
+    - name: Validate target_repo is one of the two GitOps lanes
+      ansible.builtin.assert:
+        that:
+          - target_repo in ['customer-instances', 'test-customers']
+        fail_msg: "target_repo must be 'customer-instances' or 'test-customers'."
+
+    - name: Render customer manifest in-memory
+      ansible.builtin.set_fact:
+        rendered_manifest: "{{ lookup('template', '../templates/customer-instance.yml.j2') }}"
+
+    - name: Check if a manifest already exists in the GitOps repo
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: existing_manifest_check
+
+    - name: Commit new manifest (create)
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        method: POST
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          message: "feat: provision customer {{ customer_name }} ({{ customer_email }})"
+          content: "{{ rendered_manifest | b64encode }}"
+          branch: main
+        status_code: [201]
+      when: existing_manifest_check.status == 404
+
+    - name: Commit updated manifest (update)
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        method: PUT
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          message: "chore: update customer {{ customer_name }} ({{ customer_email }})"
+          content: "{{ rendered_manifest | b64encode }}"
+          sha: "{{ existing_manifest_check.json.sha }}"
+          branch: main
+        status_code: [200]
+      when: existing_manifest_check.status == 200
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          Customer '{{ customer_name }}' provisioned via GitOps.
+          - Lane:       {{ provisioned_by }} ({{ target_repo }})
+          - Manifest:   http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ target_repo }}/src/branch/main/{{ manifest_path }}
+          - Namespace:  customer-{{ customer_name }} (created by Argo CD within ~30s)
+          - Argo CD:    http://{{ k3s_server_ip }}:{{ argocd_port }}/applications/{{ target_repo }}
+          Verify in the cluster (after ~30s):
+            kubectl get ns customer-{{ customer_name }}
+            kubectl -n customer-{{ customer_name }} get pods
