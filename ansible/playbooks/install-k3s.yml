@@ -55,11 +55,11 @@
   become: true
   tasks:
     - name: Wait for network and DNS to be ready
-      shell: |
-        until curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
-        done
-      timeout: 120
+      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
+      register: internet_check
+      retries: 60
+      delay: 10
+      until: internet_check.rc == 0
       changed_when: false
 
     - name: Check if k3s is already installed
@@ -128,11 +128,11 @@
         k3s_node_token: "{{ hostvars['k3s-server']['k3s_node_token'] }}"
 
     - name: Wait for network and DNS to be ready
-      shell: |
-        until curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
-        done
-      timeout: 120
+      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
+      register: internet_check
+      retries: 60
+      delay: 10
+      until: internet_check.rc == 0
       changed_when: false
 
     - name: Check if k3s is already installed
