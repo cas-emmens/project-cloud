@@ -48,7 +48,6 @@
 
     - name: Wait for k3s to be ready after restart
       ansible.builtin.shell: |
-        set -o pipefail
         kubectl get nodes 2>/dev/null | grep -c Ready
       register: nodes_ready
       retries: 12
