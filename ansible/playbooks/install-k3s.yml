@@ -49,6 +49,22 @@
         - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
         - { key: "net.ipv4.ip_forward", value: "1" }
 
+    - name: Ensure fallback DNS is configured via systemd-resolved
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
+        content: |
+          [Resolve]
+          DNS=10.24.36.1 1.1.1.1
+          FallbackDNS=1.1.1.1 8.8.8.8
+        mode: "0644"
+      register: dns_config
+
+    - name: Restart systemd-resolved to apply DNS config
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+      when: dns_config.changed
+
 
 - name: Install k3s server
   hosts: k3s_server
