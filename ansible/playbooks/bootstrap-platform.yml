@@ -182,6 +182,7 @@
               labels:
                 app: drone-server
             spec:
+              enableServiceLinks: false
               containers:
               - name: drone
                 image: drone/drone:2.20.0
