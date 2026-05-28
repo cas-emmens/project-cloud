@@ -506,6 +506,343 @@
             nodePort: {{ semaphore_port }}
         EOF
 
+    - name: Wait for Semaphore deployment to roll out
+      shell: |
+        kubectl -n semaphore rollout status deploy/semaphore --timeout=180s
+      changed_when: false
+
+    # ----------------------------------------------------------------
+    # Semaphore project bootstrap (REST API over curl + cookie jar)
+    # ----------------------------------------------------------------
+    # Semaphore uses cookie-based session auth. The cookie jar lives at
+    # /tmp/semaphore.cookies for the duration of this play.
+    #
+    # End-state created here, idempotently:
+    #   - Project "Orange Kuma Provisioning"
+    #   - SSH key "none" (Semaphore requires a key on every project)
+    #   - Repository pointing at project-cloud on GitHub (Semaphore
+    #     clones it when running templates; this is the source of
+    #     provision-customer.yml)
+    #   - Inventory "localhost" (static, runs Ansible locally inside
+    #     the Semaphore pod)
+    #   - Environments "sales" and "ops" each setting target_repo via
+    #     extra_vars
+    #   - Templates "Nieuwe klant aanmaken" (sales) and "Testklant
+    #     aanmaken" (ops) bound to the matching environments
+    - name: Wait for Semaphore HTTP API to respond
+      ansible.builtin.uri:
+        url: "http://localhost:{{ semaphore_port }}/api/ping"
+        status_code: [200, 204]
+      register: semaphore_ping
+      retries: 30
+      delay: 5
+      until: semaphore_ping.status in [200, 204]
+
+    - name: Log in to Semaphore as admin
+      shell: |
+        set -o pipefail
+        curl -sS -c /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/auth/login" \
+          -d "{\"auth\":\"admin\",\"password\":\"{{ gitea_admin_password }}\"}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: semaphore_login
+      retries: 5
+      delay: 3
+      until: semaphore_login.rc == 0
+
+    - name: List existing Semaphore projects
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/projects"
+      register: semaphore_projects_raw
+      changed_when: false
+
+    - name: Set fact for existing Orange Kuma project (if any)
+      set_fact:
+        semaphore_project_existing: >-
+          {{ (semaphore_projects_raw.stdout | from_json)
+             | selectattr('name', 'equalto', 'Orange Kuma Provisioning')
+             | list }}
+
+    - name: Create Semaphore project "Orange Kuma Provisioning"
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/projects" \
+          -d '{
+                "name": "Orange Kuma Provisioning",
+                "alert": false,
+                "max_parallel_tasks": 0
+              }'
+      register: semaphore_project_create
+      when: semaphore_project_existing | length == 0
+      changed_when: true
+
+    - name: Resolve Semaphore project id
+      set_fact:
+        semaphore_project_id: >-
+          {{
+            (semaphore_project_existing[0].id)
+            if (semaphore_project_existing | length > 0)
+            else (semaphore_project_create.stdout | from_json).id
+          }}
+
+    - name: List existing Semaphore keys for the project
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/keys"
+      register: semaphore_keys_raw
+      changed_when: false
+
+    - name: Create "none" SSH key on the project (required placeholder)
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/keys" \
+          -d '{
+                "name": "none",
+                "type": "none",
+                "project_id": {{ semaphore_project_id }}
+              }'
+      register: semaphore_key_create
+      when: >-
+        ((semaphore_keys_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'none')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Re-fetch Semaphore keys to pick up the new "none" key
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/keys"
+      register: semaphore_keys_after
+      changed_when: false
+
+    - name: Resolve Semaphore "none" key id
+      set_fact:
+        semaphore_none_key_id: >-
+          {{ ((semaphore_keys_after.stdout | from_json)
+                | selectattr('name', 'equalto', 'none')
+                | list)[0].id }}
+
+    - name: List existing Semaphore repositories for the project
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/repositories"
+      register: semaphore_repos_raw
+      changed_when: false
+
+    - name: Register project-cloud as a Semaphore repository
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/repositories" \
+          -d '{
+                "name": "project-cloud",
+                "project_id": {{ semaphore_project_id }},
+                "git_url": "https://github.com/cas-emmens/project-cloud.git",
+                "git_branch": "main",
+                "ssh_key_id": {{ semaphore_none_key_id }}
+              }'
+      register: semaphore_repo_create
+      when: >-
+        ((semaphore_repos_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'project-cloud')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Re-fetch Semaphore repositories
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/repositories"
+      register: semaphore_repos_after
+      changed_when: false
+
+    - name: Resolve Semaphore repository id for project-cloud
+      set_fact:
+        semaphore_repo_id: >-
+          {{ ((semaphore_repos_after.stdout | from_json)
+                | selectattr('name', 'equalto', 'project-cloud')
+                | list)[0].id }}
+
+    - name: List existing Semaphore inventories for the project
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/inventory"
+      register: semaphore_inventories_raw
+      changed_when: false
+
+    - name: Create localhost inventory
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/inventory" \
+          -d '{
+                "name": "localhost",
+                "project_id": {{ semaphore_project_id }},
+                "inventory": "localhost ansible_connection=local",
+                "ssh_key_id": null,
+                "become_key_id": null,
+                "type": "static"
+              }'
+      register: semaphore_inventory_create
+      when: >-
+        ((semaphore_inventories_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'localhost')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Re-fetch Semaphore inventories
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/inventory"
+      register: semaphore_inventories_after
+      changed_when: false
+
+    - name: Resolve Semaphore inventory id
+      set_fact:
+        semaphore_inventory_id: >-
+          {{ ((semaphore_inventories_after.stdout | from_json)
+                | selectattr('name', 'equalto', 'localhost')
+                | list)[0].id }}
+
+    - name: List existing Semaphore environments for the project
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/environment"
+      register: semaphore_envs_raw
+      changed_when: false
+
+    - name: Create "sales" environment (target_repo=customer-instances)
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/environment" \
+          -d '{
+                "name": "sales",
+                "project_id": {{ semaphore_project_id }},
+                "password": null,
+                "json": "{\"target_repo\":\"customer-instances\"}",
+                "env": "{}"
+              }'
+      register: semaphore_env_sales_create
+      when: >-
+        ((semaphore_envs_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'sales')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Create "ops" environment (target_repo=test-customers)
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/environment" \
+          -d '{
+                "name": "ops",
+                "project_id": {{ semaphore_project_id }},
+                "password": null,
+                "json": "{\"target_repo\":\"test-customers\"}",
+                "env": "{}"
+              }'
+      register: semaphore_env_ops_create
+      when: >-
+        ((semaphore_envs_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'ops')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Re-fetch Semaphore environments
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/environment"
+      register: semaphore_envs_after
+      changed_when: false
+
+    - name: Resolve Semaphore environment ids
+      set_fact:
+        semaphore_env_sales_id: >-
+          {{ ((semaphore_envs_after.stdout | from_json)
+                | selectattr('name', 'equalto', 'sales')
+                | list)[0].id }}
+        semaphore_env_ops_id: >-
+          {{ ((semaphore_envs_after.stdout | from_json)
+                | selectattr('name', 'equalto', 'ops')
+                | list)[0].id }}
+
+    - name: List existing Semaphore templates for the project
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/templates"
+      register: semaphore_templates_raw
+      changed_when: false
+
+    - name: Create sales template "Nieuwe klant aanmaken"
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/templates" \
+          -d '{
+                "name": "Nieuwe klant aanmaken",
+                "project_id": {{ semaphore_project_id }},
+                "inventory_id": {{ semaphore_inventory_id }},
+                "repository_id": {{ semaphore_repo_id }},
+                "environment_id": {{ semaphore_env_sales_id }},
+                "playbook": "ansible/playbooks/provision-customer.yml",
+                "arguments": "[]",
+                "description": "Provision een nieuwe productie-klant. Schrijft naar customer-instances en wordt door Argo CD live uitgerold.",
+                "allow_override_args_in_task": false,
+                "survey_vars": [
+                  {"name":"customer_name","title":"Klantnaam (slug)","description":"3-32 tekens, kleine letters/cijfers/streepjes","type":"","required":true},
+                  {"name":"customer_email","title":"Email","description":"Contactadres van de klant","type":"","required":true},
+                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true}
+                ]
+              }'
+      register: semaphore_tpl_sales_create
+      when: >-
+        ((semaphore_templates_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'Nieuwe klant aanmaken')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Create ops template "Testklant aanmaken"
+      shell: |
+        curl -sS -b /tmp/semaphore.cookies \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/templates" \
+          -d '{
+                "name": "Testklant aanmaken",
+                "project_id": {{ semaphore_project_id }},
+                "inventory_id": {{ semaphore_inventory_id }},
+                "repository_id": {{ semaphore_repo_id }},
+                "environment_id": {{ semaphore_env_ops_id }},
+                "playbook": "ansible/playbooks/provision-customer.yml",
+                "arguments": "[]",
+                "description": "Provision een test-klant. Schrijft naar test-customers en wordt door Argo CD live uitgerold (gescheiden van productie-statistieken).",
+                "allow_override_args_in_task": false,
+                "survey_vars": [
+                  {"name":"customer_name","title":"Klantnaam (slug)","description":"3-32 tekens, kleine letters/cijfers/streepjes","type":"","required":true},
+                  {"name":"customer_email","title":"Email","description":"Contactadres van de klant","type":"","required":true},
+                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true}
+                ]
+              }'
+      register: semaphore_tpl_ops_create
+      when: >-
+        ((semaphore_templates_raw.stdout | from_json)
+          | selectattr('name', 'equalto', 'Testklant aanmaken')
+          | list) | length == 0
+      changed_when: true
+
+    - name: Log Semaphore bootstrap summary
+      ansible.builtin.debug:
+        msg: |
+          Semaphore project "Orange Kuma Provisioning" is bootstrapped:
+            URL:         http://{{ k3s_server_ip }}:{{ semaphore_port }}/project/{{ semaphore_project_id }}
+            Templates:   "Nieuwe klant aanmaken" (sales)  and  "Testklant aanmaken" (ops)
+            Login:       admin / <Gitea admin password>
+
     # =========================================
     # HEADLAMP (Kubernetes GUI)
     # =========================================

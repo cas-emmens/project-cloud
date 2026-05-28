@@ -23,9 +23,17 @@
 # k3s_server VM has localhost access to Gitea on port 30080).
 
 - name: Provision customer Uptime Kuma instance (GitOps)
-  hosts: k3s_server
-  become: true
+  hosts: localhost
+  connection: local
   gather_facts: false
+
+  # group_vars/all.yml is loaded relative to the inventory file, which
+  # Semaphore does not give us here (it uses a static localhost
+  # inventory). Load the shared platform vars explicitly so the
+  # playbook works both from `ansible-playbook` on k3s_server and from
+  # Semaphore running inside its pod.
+  vars_files:
+    - ../group_vars/all.yml
 
   vars:
     # Default the lane to "sales" so a forgotten -e still goes to the
@@ -33,6 +41,10 @@
     target_repo: customer-instances
     provisioned_by: "{{ 'sales' if target_repo == 'customer-instances' else 'ops' }}"
     manifest_path: "customers/{{ customer_name }}.yaml"
+    # Always reach Gitea via the node-routable NodePort. This works
+    # both from the k3s_server host (NodePort on localhost) and from
+    # inside a pod (NodePort via the node IP on the pod network).
+    gitea_api_base: "http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
 
   tasks:
     - name: Validate required variables are set
@@ -65,7 +77,7 @@
 
     - name: Check if a manifest already exists in the GitOps repo
       ansible.builtin.uri:
-        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        url: "{{ gitea_api_base }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
         url_username: "{{ gitea_admin_user }}"
         url_password: "{{ gitea_admin_password }}"
         force_basic_auth: true
@@ -74,7 +86,7 @@
 
     - name: Commit new manifest (create)
       ansible.builtin.uri:
-        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        url: "{{ gitea_api_base }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
         method: POST
         url_username: "{{ gitea_admin_user }}"
         url_password: "{{ gitea_admin_password }}"
@@ -89,7 +101,7 @@
 
     - name: Commit updated manifest (update)
       ansible.builtin.uri:
-        url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
+        url: "{{ gitea_api_base }}/api/v1/repos/{{ gitea_org }}/{{ target_repo }}/contents/{{ manifest_path }}"
         method: PUT
         url_username: "{{ gitea_admin_user }}"
         url_password: "{{ gitea_admin_password }}"
