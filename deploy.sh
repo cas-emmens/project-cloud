@@ -80,10 +80,19 @@ echo -e "${BLUE}║   Phases: 1=VMs 2=k3s 3=platform 4=cicd ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
+clear_vm_host_keys() {
+    info "Clearing stale SSH host keys for VM IPs..."
+    for ip in 10.24.36.10 10.24.36.11 10.24.36.12; do
+        ssh-keygen -R "$ip" -f "$HOME/.ssh/known_hosts" > /dev/null 2>&1 || true
+    done
+    log "Host keys cleared."
+}
+
 if [ "$DESTROY_FIRST" = true ]; then
     warn "Destroying existing VMs..."
     ansible-playbook playbooks/destroy-vms.yml
     log "VMs destroyed. Starting fresh deployment."
+    clear_vm_host_keys
     echo ""
 fi
 
@@ -92,6 +101,7 @@ TOTAL_START=$(date +%s)
 if [ "$START_PHASE" -le 1 ]; then
     info "Phase 1/4: Creating VMs on Proxmox..."
     PHASE_START=$(date +%s)
+    clear_vm_host_keys
     ansible-playbook playbooks/create-vms.yml
     log "Phase 1 complete ($(( $(date +%s) - PHASE_START ))s)"
     echo ""
