@@ -713,6 +713,54 @@
         EOF
       changed_when: false
 
+    # ----------------------------------------------------------------
+    # Argo CD Image Updater credentials + registry config
+    # ----------------------------------------------------------------
+    # The Image Updater chart was installed in Phase 3 but cannot
+    # read tags from the Gitea registry until these are in place:
+    #   - gitea-image-updater Secret: basic auth for /v2/... API
+    #   - argocd-image-updater-config ConfigMap: registry entry
+    #     declaring the Gitea registry's insecure HTTP endpoint
+    #   - argocd-image-updater-ssh-config ConfigMap: known git-hosts
+    #     (kept default; Image Updater uses HTTPS to Gitea over the
+    #     in-cluster service for write-back)
+    - name: Apply Argo CD Image Updater Gitea registry credentials
+      ansible.builtin.shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: gitea-image-updater
+          namespace: argocd
+        stringData:
+          username: {{ gitea_admin_user }}
+          password: {{ gitea_argocd_pat.json.sha1 }}
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: argocd-image-updater-config
+          namespace: argocd
+        data:
+          registries.conf: |
+            registries:
+              - name: gitea
+                api_url: http://gitea-http.gitea.svc:3000
+                prefix: {{ k3s_server_ip }}:{{ gitea_http_port }}
+                insecure: true
+                credentials: secret:argocd/gitea-image-updater#username:password
+                default: true
+          git.user: image-updater
+          git.email: image-updater@orange-kuma.local
+        EOF
+      changed_when: false
+
+    - name: Restart Argo CD Image Updater so it picks up new config
+      ansible.builtin.shell: |
+        kubectl -n argocd rollout restart deploy/argocd-image-updater
+        kubectl -n argocd rollout status deploy/argocd-image-updater --timeout=120s
+      changed_when: false
+
     - name: Apply Argo CD AppProject for customer provisioning
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
@@ -754,6 +802,17 @@
         metadata:
           name: customer-instances
           namespace: argocd
+          # Image Updater annotations: watches the kuma image in the
+          # Gitea registry and when Drone publishes a new SHA tag the
+          # updater commits the new image: ref into every customer
+          # manifest in customer-instances. Argo CD then rolls the
+          # update to all customer Deployments.
+          annotations:
+            argocd-image-updater.argoproj.io/image-list: "kuma={{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma"
+            argocd-image-updater.argoproj.io/kuma.update-strategy: digest
+            argocd-image-updater.argoproj.io/kuma.allow-tags: "regexp:^[0-9a-f]{7}$$|^latest$$"
+            argocd-image-updater.argoproj.io/write-back-method: "git:secret:argocd/gitea-customer-instances"
+            argocd-image-updater.argoproj.io/git-branch: main
         spec:
           project: customer-provisioning
           source:
@@ -777,6 +836,12 @@
         metadata:
           name: test-customers
           namespace: argocd
+          annotations:
+            argocd-image-updater.argoproj.io/image-list: "kuma={{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma"
+            argocd-image-updater.argoproj.io/kuma.update-strategy: digest
+            argocd-image-updater.argoproj.io/kuma.allow-tags: "regexp:^[0-9a-f]{7}$$|^latest$$"
+            argocd-image-updater.argoproj.io/write-back-method: "git:secret:argocd/gitea-test-customers"
+            argocd-image-updater.argoproj.io/git-branch: main
         spec:
           project: customer-provisioning
           source:
