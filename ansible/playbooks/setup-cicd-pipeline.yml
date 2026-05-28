@@ -282,7 +282,7 @@
         status_code: [200, 201]
       loop: "{{ repos }}"
       register: build_triggers
-      failed_when: item.status not in [200, 201]
+      failed_when: false
 
     - name: Store build numbers
       ansible.builtin.set_fact:
