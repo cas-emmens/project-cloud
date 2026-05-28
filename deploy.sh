@@ -62,7 +62,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             echo "Usage: $0 [--destroy-first] [--phase N]"
             echo "  --destroy-first   Destroy existing VMs before deploying"
-            echo "  --phase N         Start from phase N (1=VMs, 2=k3s, 3=platform)"
+            echo "  --phase N         Start from phase N (1=VMs, 2=k3s, 3=platform, 4=cicd)"
             exit 0
             ;;
         *) err "Unknown option: $1" ;;
@@ -76,6 +76,7 @@ check_prereqs
 echo ""
 echo -e "${BLUE}╔══════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   Orange Kuma Platform - Deployment      ║${NC}"
+echo -e "${BLUE}║   Phases: 1=VMs 2=k3s 3=platform 4=cicd ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -89,7 +90,7 @@ fi
 TOTAL_START=$(date +%s)
 
 if [ "$START_PHASE" -le 1 ]; then
-    info "Phase 1/3: Creating VMs on Proxmox..."
+    info "Phase 1/4: Creating VMs on Proxmox..."
     PHASE_START=$(date +%s)
     ansible-playbook playbooks/create-vms.yml
     log "Phase 1 complete ($(( $(date +%s) - PHASE_START ))s)"
@@ -97,7 +98,7 @@ if [ "$START_PHASE" -le 1 ]; then
 fi
 
 if [ "$START_PHASE" -le 2 ]; then
-    info "Phase 2/3: Installing k3s cluster..."
+    info "Phase 2/4: Installing k3s cluster..."
     PHASE_START=$(date +%s)
     ansible-playbook playbooks/install-k3s.yml
     log "Phase 2 complete ($(( $(date +%s) - PHASE_START ))s)"
@@ -105,10 +106,18 @@ if [ "$START_PHASE" -le 2 ]; then
 fi
 
 if [ "$START_PHASE" -le 3 ]; then
-    info "Phase 3/3: Bootstrapping platform services..."
+    info "Phase 3/4: Bootstrapping platform services..."
     PHASE_START=$(date +%s)
     ansible-playbook playbooks/bootstrap-platform.yml
     log "Phase 3 complete ($(( $(date +%s) - PHASE_START ))s)"
+    echo ""
+fi
+
+if [ "$START_PHASE" -le 4 ]; then
+    info "Phase 4/4: Setting up CI/CD pipeline and deploying management tool..."
+    PHASE_START=$(date +%s)
+    ansible-playbook playbooks/setup-cicd-pipeline.yml
+    log "Phase 4 complete ($(( $(date +%s) - PHASE_START ))s)"
     echo ""
 fi
 
