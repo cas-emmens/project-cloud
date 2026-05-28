@@ -251,13 +251,13 @@
             targetPort: 80
         EOF
 
+    # drone-runner-docker handles kind=pipeline, type=docker jobs, which
+    # is what all imported repo .drone.yml files use (plugins/docker for
+    # image builds). A privileged Docker-in-Docker sidecar provides the
+    # Docker daemon the runner connects to over tcp://localhost:2375.
     - name: Deploy Drone Runner
       shell: |
         cat <<'EOF' | kubectl apply -f -
-        # drone-runner-docker handles `kind: pipeline, type: docker` jobs,
-        # which is what all imported repos' .drone.yml files use (plugins/
-        # docker for image builds). A privileged Docker-in-Docker sidecar
-        # provides the Docker daemon the runner connects to.
         apiVersion: apps/v1
         kind: Deployment
         metadata:
