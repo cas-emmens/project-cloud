@@ -230,6 +230,55 @@
         msg: "Repository '{{ item.item.name }}': beschikbaar in Gitea."
       loop: "{{ repo_ready_check.results }}"
 
+    - name: List existing Gitea tokens for admin user
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens"
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: [200]
+      register: gitea_existing_tokens
+      changed_when: false
+
+    - name: Delete existing drone-oauth token in Gitea if present
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        status_code: [204]
+      loop: "{{ gitea_existing_tokens.json | selectattr('name', 'equalto', 'drone-oauth') | list }}"
+      changed_when: true
+
+    - name: Create Gitea personal access token for Drone repository sync
+      ansible.builtin.uri:
+        url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens"
+        method: POST
+        url_username: "{{ gitea_admin_user }}"
+        url_password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "drone-oauth"
+        status_code: [201]
+      register: gitea_drone_pat
+
+    - name: Inject Gitea OAuth token into Drone database to enable repo sync
+      ansible.builtin.shell: |
+        GITEA_TOKEN="{{ gitea_drone_pat.json.sha1 }}"
+        GITEA_USER="{{ gitea_admin_user }}"
+        DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
+          -o jsonpath='{.items[0].metadata.name}')
+        kubectl -n drone exec "$DRONE_POD" -- \
+          sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1"
+        kubectl -n drone exec "$DRONE_POD" -- \
+          sqlite3 /data/database.sqlite \
+          "UPDATE users SET user_token='${GITEA_TOKEN}' WHERE user_login='${GITEA_USER}'"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
     - name: Sync Drone repo list from Gitea
       ansible.builtin.uri:
         url: "http://localhost:{{ drone_port }}/api/user/repos?flush=true"
