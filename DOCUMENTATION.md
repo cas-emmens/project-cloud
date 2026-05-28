@@ -306,7 +306,7 @@ ssh-keygen -f '/root/.ssh/known_hosts' -R '10.24.36.10'
 New Orange Kuma instances are deployed per customer using:
 
 ```bash
-ansible-playbook playbooks/provision-customer.yml -e customer_name=acme -e customer_admin_password=SecurePass123
+ansible-playbook playbooks/provision-customer-management.yml
 ```
 
 Or via the Semaphore UI (intended for the verkoper — no CLI required).
@@ -345,7 +345,7 @@ k3s-platform/
 │       ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
 │       ├── install-k3s.yml                # Phase 2: Install k3s cluster
 │       ├── bootstrap-platform.yml         # Phase 3: Deploy all services
-│       ├── provision-customer.yml         # Create new customer instance
+│       ├── provision-customer-management.yml  # Deploy Orange Kuma Management Portaal
 │       └── remove-customer.yml            # Remove customer instance
 └── k8s/
     └── orange-kuma/

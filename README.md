@@ -56,7 +56,7 @@ export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)"
 | `playbooks/destroy-vms.yml` | Destroy all k3s VMs |
 | `playbooks/install-k3s.yml` | Install k3s cluster |
 | `playbooks/bootstrap-platform.yml` | Install all platform services |
-| `playbooks/provision-customer.yml` | Deploy a new Orange Kuma customer instance |
+| `playbooks/provision-customer-management.yml` | Deploy het Orange Kuma Management Portaal |
 | `playbooks/remove-customer.yml` | Remove a customer instance |
 
 ## Default Credentials

@@ -12,21 +12,6 @@
   become: true
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-  vars:
-    k3s_server_ip: "10.24.36.10"
-    domain_suffix: "10.24.36.10.nip.io"
-
-    # Service NodePort assignments (for easy access without ingress controller)
-    gitea_http_port: 30080
-    gitea_ssh_port: 30022
-    drone_port: 30081
-    argocd_port: 30082
-    grafana_port: 30083
-    semaphore_port: 30084
-    alertmanager_port: 30085
-    headlamp_port: 30086
-    prometheus_port: 30090
-
   tasks:
     # =========================================
     # HELM INSTALLATION
@@ -73,8 +58,8 @@
           --set service.http.nodePort={{ gitea_http_port }} \
           --set service.ssh.type=NodePort \
           --set service.ssh.nodePort={{ gitea_ssh_port }} \
-          --set gitea.admin.username=gitea_admin \
-          --set gitea.admin.password=OrangeKuma2025! \
+          --set gitea.admin.username={{ gitea_admin_user }} \
+          --set gitea.admin.password={{ gitea_admin_password }} \
           --set gitea.admin.email=admin@orangekuma.local \
           --set gitea.config.server.ROOT_URL=http://{{ k3s_server_ip }}:{{ gitea_http_port }} \
           --set gitea.config.server.SSH_PORT={{ gitea_ssh_port }} \
@@ -106,7 +91,7 @@
         done
 
         # Check if OAuth app already exists
-        EXISTING=$(curl -sf -u gitea_admin:OrangeKuma2025! \
+        EXISTING=$(curl -sf -u {{ gitea_admin_user }}:{{ gitea_admin_password }} \
           "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2" | \
           python3 -c "import sys,json; apps=json.load(sys.stdin); print(next((a['client_id'] for a in apps if a['name']=='drone'), ''))" 2>/dev/null)
 
@@ -116,7 +101,7 @@
         fi
 
         # Create OAuth app
-        RESULT=$(curl -sf -X POST -u gitea_admin:OrangeKuma2025! \
+        RESULT=$(curl -sf -X POST -u {{ gitea_admin_user }}:{{ gitea_admin_password }} \
           -H "Content-Type: application/json" \
           -d '{
             "name": "drone",
@@ -230,7 +215,7 @@
                       name: drone-secrets
                       key: DRONE_ADMIN_TOKEN
                 - name: DRONE_USER_CREATE
-                  value: "username:gitea_admin,machine:false,admin:true,token:$(DRONE_ADMIN_TOKEN)"
+                  value: "username:{{ gitea_admin_user }},machine:false,admin:true,token:$(DRONE_ADMIN_TOKEN)"
                 volumeMounts:
                 - name: data
                   mountPath: /data
@@ -369,7 +354,7 @@
           --namespace monitoring \
           --set grafana.service.type=NodePort \
           --set grafana.service.nodePort={{ grafana_port }} \
-          --set grafana.adminPassword=OrangeKuma2025! \
+          --set grafana.adminPassword={{ gitea_admin_password }} \
           --set grafana.persistence.enabled=true \
           --set grafana.persistence.storageClassName=local-path \
           --set grafana.persistence.size=2Gi \
@@ -416,7 +401,7 @@
                 - name: SEMAPHORE_DB_DIALECT
                   value: bolt
                 - name: SEMAPHORE_ADMIN_PASSWORD
-                  value: OrangeKuma2025!
+                  value: {{ gitea_admin_password }}
                 - name: SEMAPHORE_ADMIN_NAME
                   value: admin
                 - name: SEMAPHORE_ADMIN_EMAIL
@@ -530,7 +515,7 @@
           ============================================
 
           Gitea:        http://{{ k3s_server_ip }}:{{ gitea_http_port }}
-                        User: gitea_admin / OrangeKuma2025!
+                        User: {{ gitea_admin_user }} / {{ gitea_admin_password }}
                         SSH:  ssh://git@{{ k3s_server_ip }}:{{ gitea_ssh_port }}
 
           Drone CI:     http://{{ k3s_server_ip }}:{{ drone_port }}
@@ -540,13 +525,13 @@
                         User: admin / {{ argocd_password.stdout }}
 
           Grafana:      http://{{ k3s_server_ip }}:{{ grafana_port }}
-                        User: admin / OrangeKuma2025!
+                        User: admin / {{ gitea_admin_password }}
 
           Prometheus:   http://{{ k3s_server_ip }}:{{ prometheus_port }}
           Alertmanager: http://{{ k3s_server_ip }}:{{ alertmanager_port }}
 
           Semaphore:    http://{{ k3s_server_ip }}:{{ semaphore_port }}
-                        User: admin / OrangeKuma2025!
+                        User: admin / {{ gitea_admin_password }}
 
           Headlamp:     http://{{ k3s_server_ip }}:{{ headlamp_port }}
                         Token: {{ headlamp_token.stdout[:20] }}...

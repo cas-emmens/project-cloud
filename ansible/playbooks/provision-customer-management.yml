@@ -1,0 +1,80 @@
+---
+# playbooks/provision-customer-management.yml
+# Deployt het Orange Kuma Management Portaal naar Kubernetes.
+#
+# Het management portaal is de centrale plek voor verkopers om nieuwe Orange Kuma
+# omgevingen op te zetten voor klanten. Dit playbook deployt uitsluitend het portaal.
+# Klant-provisioning verloopt daarna via de UI/API van het portaal zelf.
+#
+# Vereist: setup-cicd-pipeline.yml (Phase 4) moet eerst zijn uitgevoerd,
+#          zodat het management-tool image beschikbaar is in de Gitea registry.
+#
+# Gebruik:
+#   ansible-playbook playbooks/provision-customer-management.yml
+#
+# Idempotent: opnieuw draaien werkt zonder duplicaten.
+
+- name: Deploy Orange Kuma Management Portaal
+  hosts: k3s_server
+  become: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+  tasks:
+    - name: Copy management portaal manifest naar server
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../k8s/management-tool/deployment.yml"
+        dest: /tmp/management-tool-deployment.yml
+        mode: "0600"
+
+    - name: Apply management portaal Kubernetes resources
+      ansible.builtin.shell: |
+        kubectl apply -f /tmp/management-tool-deployment.yml
+      register: mgmt_apply
+      changed_when: "'configured' in mgmt_apply.stdout or 'created' in mgmt_apply.stdout"
+
+    - name: Verwijder tijdelijk manifest
+      ansible.builtin.file:
+        path: /tmp/management-tool-deployment.yml
+        state: absent
+
+    - name: Wacht tot management portaal deployment gereed is
+      ansible.builtin.shell: |
+        kubectl -n orange-kuma rollout status deploy/management-tool --timeout=180s
+      changed_when: false
+      register: mgmt_rollout
+      failed_when: mgmt_rollout.rc != 0
+
+    - name: Haal management portaal NodePort op
+      ansible.builtin.shell: |
+        kubectl -n orange-kuma get svc management-tool \
+          -o jsonpath='{.spec.ports[0].nodePort}'
+      register: mgmt_nodeport
+      changed_when: false
+
+    - name: Controleer of management portaal bereikbaar is
+      ansible.builtin.uri:
+        url: "http://localhost:{{ mgmt_nodeport.stdout }}/"
+        status_code: [200, 301, 302]
+      register: mgmt_health
+      retries: 12
+      delay: 10
+      until: mgmt_health.status in [200, 301, 302]
+      failed_when: mgmt_health.status is not defined
+
+    - name: Print toegangsgegevens management portaal
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Management Portaal succesvol gedeployed!
+          ============================================
+
+          URL: http://{{ k3s_server_ip }}:{{ mgmt_nodeport.stdout }}
+
+          Verkopers kunnen via dit portaal nieuwe Orange Kuma
+          omgevingen aanmaken voor klanten.
+
+          Verificatie:
+            kubectl -n orange-kuma get deploy management-tool
+            kubectl -n orange-kuma get svc management-tool
+          ============================================

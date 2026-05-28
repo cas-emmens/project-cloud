@@ -18,10 +18,6 @@
 - name: Configure Gitea container registry on all k3s nodes
   hosts: k3s_server:k3s_agents
   become: true
-  vars:
-    k3s_server_ip: "10.24.36.10"
-    gitea_http_port: 30080
-
   tasks:
     - name: Configure containerd insecure registry for Gitea
       ansible.builtin.copy:
@@ -72,16 +68,8 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
   vars:
-    k3s_server_ip: "10.24.36.10"
-    gitea_http_port: 30080
-    drone_port: 30081
-    gitea_admin_user: gitea_admin
-    gitea_admin_password: OrangeKuma2025!
-    gitea_org: orange
-    management_tool_port: 30087
-    # Poort waarop de management tool container luistert.
-    # Aanpassen als de .drone.yml een andere poort definieert.
-    management_tool_container_port: 3000
+    # Poort waarop de management tool container intern luistert (zie server.js: PORT, default 4000).
+    management_tool_container_port: 4000
     repos:
       - name: orange-uptime-kuma
         github_url: https://github.com/danielpastoor/orange-uptime-kuma
@@ -182,7 +170,7 @@
 
     - name: Set Gitea registry credentials as Drone org secrets
       ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/secrets/{{ gitea_org }}"
+        url: "http://localhost:{{ drone_port }}/api/orgsecrets/{{ gitea_org }}"
         method: POST
         headers:
           Authorization: "Bearer {{ drone_admin_token }}"
@@ -193,9 +181,11 @@
           pull_request: false
         status_code: [200, 201, 409]
       loop:
-        - { name: "GITEA_REGISTRY", value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
+        - { name: "GITEA_REGISTRY",     value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
         - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
         - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
+        - { name: "KUMA_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
+        - { name: "MGMT_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
       changed_when: false
 
     - name: Check if repositories exist in Gitea
@@ -292,7 +282,7 @@
         status_code: [200, 201]
       loop: "{{ repos }}"
       register: build_triggers
-      failed_when: build_triggers.status not in [200, 201]
+      failed_when: item.status not in [200, 201]
 
     - name: Store build numbers
       ansible.builtin.set_fact:

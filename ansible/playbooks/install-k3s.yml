@@ -53,8 +53,6 @@
 - name: Install k3s server
   hosts: k3s_server
   become: true
-  vars:
-    k3s_server_ip: "10.24.36.10"
   tasks:
     - name: Check if k3s is already installed
       stat:
@@ -109,8 +107,6 @@
 - name: Join k3s agents
   hosts: k3s_agents
   become: true
-  vars:
-    k3s_server_ip: "10.24.36.10"
   tasks:
     - name: Get token from server
       set_fact:
