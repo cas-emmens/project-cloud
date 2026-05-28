@@ -61,6 +61,7 @@
 
     - name: Install k3s server
       shell: |
+        set -o pipefail
         curl -sfL https://get.k3s.io | \
           INSTALL_K3S_VERSION="{{ k3s_version }}" \
           K3S_KUBECONFIG_MODE="644" \
@@ -71,6 +72,8 @@
           --disable=traefik \
           --write-kubeconfig-mode=644 \
           --node-name=k3s-server
+      args:
+        executable: /bin/bash
       when: not k3s_binary.stat.exists
 
     - name: Wait for k3s to be ready
@@ -78,7 +81,7 @@
         until kubectl get nodes 2>/dev/null | grep -q "Ready"; do
           sleep 2
         done
-      timeout: 120
+      timeout: 300
       changed_when: false
 
     - name: Get k3s node token
@@ -119,12 +122,15 @@
 
     - name: Install k3s agent
       shell: |
+        set -o pipefail
         curl -sfL https://get.k3s.io | \
           INSTALL_K3S_VERSION="{{ k3s_version }}" \
           K3S_URL="https://{{ k3s_server_ip }}:6443" \
           K3S_TOKEN="{{ k3s_node_token }}" \
           sh -s - agent \
           --node-name={{ inventory_hostname }}
+      args:
+        executable: /bin/bash
       when: not k3s_binary.stat.exists
 
     - name: Wait for agent to join
