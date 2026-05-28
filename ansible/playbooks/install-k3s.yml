@@ -49,17 +49,39 @@
         - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
         - { key: "net.ipv4.ip_forward", value: "1" }
 
+    - name: Ensure systemd-resolved drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Ensure fallback DNS is configured via systemd-resolved
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
+        content: |
+          [Resolve]
+          DNS=10.24.36.1 1.1.1.1
+          FallbackDNS=1.1.1.1 8.8.8.8
+        mode: "0644"
+      register: dns_config
+
+    - name: Restart systemd-resolved to apply DNS config
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+      when: dns_config.changed
+
 
 - name: Install k3s server
   hosts: k3s_server
   become: true
   tasks:
     - name: Wait for network and DNS to be ready
-      shell: |
-        until curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
-        done
-      timeout: 120
+      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
+      register: internet_check
+      retries: 60
+      delay: 10
+      until: internet_check.rc == 0
       changed_when: false
 
     - name: Check if k3s is already installed
@@ -128,11 +150,11 @@
         k3s_node_token: "{{ hostvars['k3s-server']['k3s_node_token'] }}"
 
     - name: Wait for network and DNS to be ready
-      shell: |
-        until curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null 2>&1; do
-          sleep 5
-        done
-      timeout: 120
+      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
+      register: internet_check
+      retries: 60
+      delay: 10
+      until: internet_check.rc == 0
       changed_when: false
 
     - name: Check if k3s is already installed

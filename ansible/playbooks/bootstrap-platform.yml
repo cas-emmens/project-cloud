@@ -251,27 +251,46 @@
             targetPort: 80
         EOF
 
+    # drone-runner-docker handles kind=pipeline, type=docker jobs, which
+    # is what all imported repo .drone.yml files use (plugins/docker for
+    # image builds). A privileged Docker-in-Docker sidecar provides the
+    # Docker daemon the runner connects to over tcp://localhost:2375.
     - name: Deploy Drone Runner
       shell: |
         cat <<'EOF' | kubectl apply -f -
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: drone-runner
+          name: drone-runner-docker
           namespace: drone
         spec:
           replicas: 1
           selector:
             matchLabels:
-              app: drone-runner
+              app: drone-runner-docker
           template:
             metadata:
               labels:
-                app: drone-runner
+                app: drone-runner-docker
             spec:
+              enableServiceLinks: false
               containers:
+              - name: dind
+                image: docker:26-dind
+                securityContext:
+                  privileged: true
+                env:
+                - name: DOCKER_TLS_CERTDIR
+                  value: ""
+                args:
+                  - "--host=tcp://0.0.0.0:2375"
+                  - "--tls=false"
+                  - "--insecure-registry={{ k3s_server_ip }}:{{ gitea_http_port }}"
+                volumeMounts:
+                - name: docker-storage
+                  mountPath: /var/lib/docker
               - name: runner
-                image: drone/drone-runner-kube:latest
+                image: drone/drone-runner-docker:1
                 env:
                 - name: DRONE_RPC_HOST
                   value: "drone-server.drone.svc:80"
@@ -282,28 +301,17 @@
                     secretKeyRef:
                       name: drone-secrets
                       key: DRONE_RPC_SECRET
-                - name: DRONE_NAMESPACE_DEFAULT
-                  value: "drone"
-              serviceAccountName: drone-runner
-        ---
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: drone-runner
-          namespace: drone
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: drone-runner
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: cluster-admin
-        subjects:
-        - kind: ServiceAccount
-          name: drone-runner
-          namespace: drone
+                - name: DOCKER_HOST
+                  value: "tcp://localhost:2375"
+                - name: DRONE_RUNNER_CAPACITY
+                  value: "2"
+                - name: DRONE_RUNNER_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+              volumes:
+              - name: docker-storage
+                emptyDir: {}
         EOF
 
     # =========================================
