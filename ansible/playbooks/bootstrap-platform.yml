@@ -276,7 +276,7 @@
               enableServiceLinks: false
               containers:
               - name: dind
-                image: docker:24-dind
+                image: docker:26-dind
                 securityContext:
                   privileged: true
                 env:
