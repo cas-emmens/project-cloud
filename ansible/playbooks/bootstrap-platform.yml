@@ -383,6 +383,48 @@
     # =========================================
     # SEMAPHORE (Ansible UI)
     # =========================================
+    # The Semaphore access-key encryption key must be stable across
+    # Ansible runs. Previously it was rendered inline from
+    # lookup('password', '/dev/null length=32 chars=hexdigits') which
+    # generated a NEW key every run. The encrypted BoltDB on the PVC
+    # could then no longer be decrypted and the pod went into
+    # CrashLoopBackOff. Persist the key in a Kubernetes Secret on first
+    # creation and reuse it forever.
+    # BoltDB is kept on purpose: the original crash was key drift, not
+    # a database engine problem; Bolt keeps the deployment lean (no
+    # extra Postgres dependency).
+    - name: Read existing Semaphore encryption key from secret (if present)
+      shell: |
+        set -o pipefail
+        kubectl -n semaphore get secret semaphore-secrets \
+          -o jsonpath='{.data.SEMAPHORE_ACCESS_KEY_ENCRYPTION}' 2>/dev/null | base64 -d
+      args:
+        executable: /bin/bash
+      register: existing_semaphore_encryption_key
+      changed_when: false
+      failed_when: false
+
+    - name: Generate Semaphore encryption key (only if missing)
+      shell: openssl rand -hex 32
+      register: new_semaphore_encryption_key
+      when: existing_semaphore_encryption_key.stdout == ''
+      changed_when: false
+
+    - name: Set semaphore_encryption_key fact
+      set_fact:
+        semaphore_encryption_key: >-
+          {{ existing_semaphore_encryption_key.stdout
+             if existing_semaphore_encryption_key.stdout != ''
+             else new_semaphore_encryption_key.stdout }}
+
+    - name: Create Semaphore secrets (encryption key + admin password)
+      shell: |
+        kubectl -n semaphore create secret generic semaphore-secrets \
+          --from-literal=SEMAPHORE_ACCESS_KEY_ENCRYPTION="{{ semaphore_encryption_key }}" \
+          --from-literal=SEMAPHORE_ADMIN_PASSWORD="{{ gitea_admin_password }}" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+
     - name: Deploy Semaphore
       shell: |
         cat <<'EOF' | kubectl apply -f -
@@ -409,16 +451,26 @@
                 env:
                 - name: SEMAPHORE_DB_DIALECT
                   value: bolt
-                - name: SEMAPHORE_ADMIN_PASSWORD
-                  value: {{ gitea_admin_password }}
                 - name: SEMAPHORE_ADMIN_NAME
                   value: admin
                 - name: SEMAPHORE_ADMIN_EMAIL
                   value: admin@orangekuma.local
                 - name: SEMAPHORE_ADMIN
                   value: admin
+                # Both sensitive vars come from the semaphore-secrets
+                # Secret. The encryption key must NOT regenerate on each
+                # Ansible run - see the idempotent secret-creation block
+                # above for the rationale.
+                - name: SEMAPHORE_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: semaphore-secrets
+                      key: SEMAPHORE_ADMIN_PASSWORD
                 - name: SEMAPHORE_ACCESS_KEY_ENCRYPTION
-                  value: "{{ lookup('password', '/dev/null length=32 chars=hexdigits') }}"
+                  valueFrom:
+                    secretKeyRef:
+                      name: semaphore-secrets
+                      key: SEMAPHORE_ACCESS_KEY_ENCRYPTION
                 volumeMounts:
                 - name: data
                   mountPath: /var/lib/semaphore
