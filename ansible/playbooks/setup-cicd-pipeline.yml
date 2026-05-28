@@ -261,6 +261,11 @@
         body_format: json
         body:
           name: "drone-oauth"
+          scopes:
+            - "write:repository"
+            - "write:organization"
+            - "write:user"
+            - "write:admin"
         status_code: [201]
       register: gitea_drone_pat
 
