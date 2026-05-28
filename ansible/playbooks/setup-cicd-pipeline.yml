@@ -394,24 +394,32 @@
           {{ 'geactiveerd' if item.status == 200 else 'was al actief' }}.
       loop: "{{ drone_activate.results }}"
 
-    - name: Set Gitea registry credentials as Drone org secrets
+    # Drone org-level secrets require the org to exist in Drone's namespace,
+    # which is only populated via the broken sync. Use repo-level secrets
+    # instead — repos exist in Drone's DB (via our direct INSERT), and the
+    # .drone.yml in each repo references secrets by name regardless of scope.
+    - name: Set Gitea registry credentials as Drone repo secrets
       ansible.builtin.uri:
-        url: "http://localhost:{{ drone_port }}/api/orgsecrets/{{ gitea_org }}"
+        url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.0.name }}/secrets"
         method: POST
         headers:
           Authorization: "Bearer {{ drone_admin_token }}"
         body_format: json
         body:
-          name: "{{ item.name }}"
-          data: "{{ item.value }}"
+          name: "{{ item.1.name }}"
+          data: "{{ item.1.value }}"
           pull_request: false
         status_code: [200, 201, 409]
-      loop:
-        - { name: "GITEA_REGISTRY",     value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
-        - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
-        - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
-        - { name: "KUMA_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
-        - { name: "MGMT_IMAGE_REPO",    value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
+      loop: "{{ repos | product(drone_secret_pairs) | list }}"
+      loop_control:
+        label: "{{ item.0.name }} / {{ item.1.name }}"
+      vars:
+        drone_secret_pairs:
+          - { name: "GITEA_REGISTRY",          value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
+          - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
+          - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
+          - { name: "KUMA_IMAGE_REPO",         value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
+          - { name: "MGMT_IMAGE_REPO",         value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
       changed_when: false
 
     - name: Trigger first build for each repository
