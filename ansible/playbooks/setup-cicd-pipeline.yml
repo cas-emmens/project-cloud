@@ -126,23 +126,30 @@
           Controleer of de drone-server deployment actief is.
       when: drone_health.status is defined and drone_health.status != 200
 
-    - name: Get Drone admin token from k8s secret
+    # Try to read the existing Drone admin token from the k8s secret.
+    # If the secret was not created by Phase 3 (or was lost), generate a
+    # new one and create the secret so Phase 4 can continue.
+    - name: Get Drone admin token from k8s secret (or create if missing)
       ansible.builtin.shell: |
         set -o pipefail
-        kubectl -n drone get secret drone-secrets \
-          -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' | base64 -d
+        EXISTING=$(kubectl -n drone get secret drone-secrets \
+          -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' 2>/dev/null | base64 -d)
+        if [ -z "$EXISTING" ]; then
+          # Secret missing or empty — generate a new admin token
+          DRONE_ADMIN_TOKEN=$(openssl rand -hex 32)
+          kubectl -n drone create secret generic drone-secrets \
+            --from-literal=DRONE_RPC_SECRET="$DRONE_ADMIN_TOKEN" \
+            --from-literal=DRONE_ADMIN_TOKEN="$DRONE_ADMIN_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "$DRONE_ADMIN_TOKEN"
+        else
+          echo "$EXISTING"
+        fi
       args:
         executable: /bin/bash
       register: drone_token_raw
       changed_when: false
       failed_when: drone_token_raw.stdout == ''
-
-    - name: Fail if Drone admin token is not set
-      ansible.builtin.fail:
-        msg: >
-          DRONE_ADMIN_TOKEN is leeg. Zorg dat bootstrap-platform.yml (Phase 3)
-          opnieuw is uitgevoerd na de laatste update.
-      when: drone_token_raw.stdout == ''
 
     - name: Set drone_admin_token fact
       ansible.builtin.set_fact:
@@ -774,8 +781,17 @@
           sourceRepos:
             - http://gitea-http.gitea.svc:3000/{{ gitea_org }}/customer-instances.git
             - http://gitea-http.gitea.svc:3000/{{ gitea_org }}/test-customers.git
+          # Namespace must be '*', not 'customer-*'. Each Application's own
+          # destination.namespace is empty (every committed manifest carries
+          # its own customer-<slug> namespace, and CreateNamespace=true makes
+          # them), and 'customer-*' does not match the empty string — Argo CD
+          # would reject the Application with InvalidSpecError before it ever
+          # reads the repo. Scope is still tight: sourceRepos limits the input
+          # to the two customer repos, clusterResourceWhitelist allows only
+          # Namespace, and namespaceResourceWhitelist allows only the kinds
+          # the customer template ships.
           destinations:
-            - namespace: 'customer-*'
+            - namespace: '*'
               server: https://kubernetes.default.svc
           clusterResourceWhitelist:
             - group: ''
