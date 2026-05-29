@@ -209,7 +209,7 @@ Phase 4 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioni
 
 Both templates expose a survey form (customer name, email, admin password, optional domain) so non-technical staff fill in a form and hit Run. See [Section 12](#12-customer-provisioning-gitops).
 
-Important: the pod sets `enableServiceLinks: false`. A Service named `semaphore` makes Kubernetes inject `SEMAPHORE_PORT=tcp://<clusterIP>:3000` into the container, but Semaphore reads `SEMAPHORE_PORT` as its own listen port and expects a bare number (`3000`) — the `tcp://` value makes it fail to bind and crash-loop. Disabling service links stops all such env injection. The Deployment also has a readiness probe on `/api/ping` so a misconfigured pod fails the rollout with a clear signal instead of passing and breaking a later step.
+Important: the Kubernetes Service is named `semaphore-ui` (not `semaphore`). A Service named `semaphore` would make Kubernetes inject `SEMAPHORE_PORT=tcp://<clusterIP>:3000` into the container; Semaphore reads `SEMAPHORE_PORT` as its own listen port and expects a bare number (`3000`), so the `tcp://` value makes it fail to bind and crash-loop. Renaming the Service avoids the collision entirely. The Deployment also has a readiness probe on `/api/ping` so a misconfigured pod fails the `rollout status` step with a clear signal instead of passing silently and breaking a later task.
 
 The encryption key for Semaphore's BoltDB credential store is persisted in a Kubernetes Secret (`semaphore-secrets`) so it survives re-runs — see [Section 11](#11-known-issues--workarounds).
 
@@ -319,9 +319,9 @@ The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the
 
 The `debian-12-generic-amd64.qcow2` image has very limited package repos. Packages like `open-iscsi`, `nfs-common`, and `apt-transport-https` are not available. This is why we use `local-path` storage instead of Longhorn. Only `curl` is installed as a prerequisite for k3s.
 
-### Semaphore service-link env conflict
+### Semaphore service name conflict
 
-Kubernetes auto-injects environment variables for Services in the same namespace (e.g., for a Service named `semaphore` it injects `SEMAPHORE_PORT=tcp://10.43.x.x:3000`). This collides with Semaphore's own config, which reads `SEMAPHORE_PORT` as its listen port and expects a bare number like `3000` — the `tcp://` value makes it fail to bind and crash-loop, which surfaces downstream as `Connection refused` when polling `/api/ping`. The fix is `enableServiceLinks: false` on the pod spec, which disables that injection entirely (the same guard the customer kuma pods use). A readiness probe on `/api/ping` was also added so a broken pod fails the `rollout status` step directly.
+Kubernetes auto-injects environment variables for Services in the same namespace. A Service named `semaphore` injects `SEMAPHORE_PORT=tcp://10.43.x.x:3000` into every pod in that namespace. Semaphore reads `SEMAPHORE_PORT` as its listen port and expects a bare number (`3000`) — the `tcp://` value makes it fail to bind and crash-loop, surfacing as `Connection refused` when polling `/api/ping`. The fix is naming the Service `semaphore-ui` instead of `semaphore`, which avoids the collision (the injected var becomes `SEMAPHORE_UI_PORT`, which Semaphore ignores). A readiness probe on `/api/ping` was also added so a broken pod fails at `rollout status` with a clear signal rather than passing silently and breaking a later task.
 
 ### Semaphore encryption-key drift
 
