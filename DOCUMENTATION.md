@@ -20,8 +20,11 @@
 9. [Network Policies & Security](#9-network-policies--security)
 10. [Automation & Greenfield Deployment](#10-automation--greenfield-deployment)
 11. [Known Issues & Workarounds](#11-known-issues--workarounds)
-12. [Customer Provisioning](#12-customer-provisioning)
-13. [File Structure](#13-file-structure)
+12. [Customer Provisioning (GitOps)](#12-customer-provisioning-gitops)
+13. [Orange Kuma Image Customizations](#13-orange-kuma-image-customizations)
+14. [Management Tool Dashboard](#14-management-tool-dashboard)
+15. [Auto-Update Strategy](#15-auto-update-strategy)
+16. [File Structure](#16-file-structure)
 
 ---
 
@@ -50,7 +53,7 @@ We initially planned Longhorn for distributed storage, but the Debian 12 cloud i
 
 ### Why namespace isolation instead of node separation?
 
-Best practice in production is to separate customer-facing workloads from internal tools on different node pools. With only 3 nodes at 2 vCPUs each, we don't have enough resources for that. Instead, we use Kubernetes NetworkPolicies to isolate customer namespaces from each other and from internal services. This is documented in the security section and is a defensible architectural decision at this scale.
+Best practice in production is to separate customer-facing workloads from internal tools on different node pools. With only 3 nodes at 2 vCPUs each, we don't have enough resources for that. Instead, we use a Kubernetes NetworkPolicy to isolate customer namespaces from each other and keep the only customer-facing write path (Argo CD reconciliation) and a read-only control plane. This is documented in the security section and is a defensible architectural decision at this scale.
 
 ---
 
@@ -171,6 +174,18 @@ Continuous deployment / GitOps. Installed via the official Argo Helm chart. Conf
 
 This is the Kubernetes bonus points item — Argo CD running natively on k3s, watching Gitea repos for changes, and automatically syncing deployments.
 
+The CI/CD wiring (Phase 4, `setup-cicd-pipeline.yml`) configures Argo CD for customer provisioning:
+
+- **AppProject `customer-provisioning`** — scopes what the customer Applications may deploy. `sourceRepos` lists the two Gitea provisioning repos; `clusterResourceWhitelist` permits `Namespace`; `namespaceResourceWhitelist` permits `Deployment`, `Service`, `PersistentVolumeClaim`, `NetworkPolicy`, `Secret`.
+- **Two Applications** — `customer-instances` (sales lane) and `test-customers` (ops lane), each watching the matching Gitea repo with `directory.recurse: true`, `syncPolicy.automated` (prune + selfHeal), and `CreateNamespace=true`. Every `customers/<slug>.yaml` file committed to a repo becomes a reconciled `customer-<slug>` namespace.
+- **Repo credential Secrets** — one per repo in the `argocd` namespace (labelled `argocd.argoproj.io/secret-type: repository`), authenticating Argo CD to Gitea over the in-cluster HTTP service `gitea-http.gitea.svc:3000`.
+
+See [Section 12](#12-customer-provisioning-gitops) for the full provisioning flow.
+
+### Argo CD Image Updater (namespace: `argocd`)
+
+Automatically rolls customer instances onto new image builds. Installed via the official `argocd-image-updater` Helm chart, configured with the Gitea registry (`10.24.36.10:30080`, insecure) using the same read-only PAT minted for Argo CD repo access. The two customer Applications carry Image Updater annotations: when Drone publishes a new `orange-uptime-kuma` image tag, the updater rewrites the `image:` field in every `customers/*.yaml`, commits the change back to the Gitea repo (`write-back-method: git`), and Argo CD reconciles the new image into each customer's Deployment. See [Section 15](#15-auto-update-strategy).
+
 ### Prometheus + Grafana + Alertmanager (namespace: `monitoring`)
 
 Full monitoring stack installed via the `kube-prometheus-stack` Helm chart. This single chart deploys:
@@ -185,13 +200,26 @@ This covers the "monitoring plus alerting" requirement for "Zeer goed."
 
 ### Semaphore (namespace: `semaphore`)
 
-Ansible UI for provisioning. This is how the "verkoper" creates new customer instances. Deployed as a raw Kubernetes manifest with BoltDB (file-based database, no external DB needed). 1 GB persistent storage.
+Ansible UI for provisioning. This is the rubric-named tool through which the "verkoper" (and ops staff) create new customer instances — no CLI required. Deployed as a raw Kubernetes manifest with BoltDB (file-based database, no external DB needed). 1 GB persistent storage.
+
+Phase 4 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioning`, a repository pointing at the project-cloud Gitea repo, a `localhost` inventory, and **two templates** that share the single `provision-customer.yml` playbook:
+
+- **"Nieuwe klant aanmaken"** (sales) — commits the rendered manifest to the `customer-instances` repo.
+- **"Testklant aanmaken"** (ops) — commits to the `test-customers` repo.
+
+Both templates expose a survey form (customer name, email, admin password, optional domain) so non-technical staff fill in a form and hit Run. See [Section 12](#12-customer-provisioning-gitops).
 
 Important: the Kubernetes service is named `semaphore-ui` (not `semaphore`) because Kubernetes injects environment variables based on service names, and `SEMAPHORE_PORT=tcp://...` conflicts with Semaphore's own `SEMAPHORE_PORT` config (which expects just a number like `3000`).
+
+The encryption key for Semaphore's BoltDB credential store is persisted in a Kubernetes Secret (`semaphore-secrets`) so it survives re-runs — see [Section 11](#11-known-issues--workarounds).
 
 ### Headlamp (namespace: `kube-system`)
 
 Kubernetes web UI. Installed via Helm. Provides a visual dashboard for the cluster, useful for demos and troubleshooting. Authentication is via a ServiceAccount token (stored at `/tmp/headlamp-token.txt` on the Ansible control node).
+
+### Management Tool (namespace: `orange-kuma`)
+
+A branded, **read-only customer health dashboard** (NodePort `30087`), deployed in Phase 4. It lists every provisioned customer and surfaces pod status, Argo CD sync/health, the latest Gitea commit for the customer's manifest, and a deep-link button into the Semaphore sales template. It performs no writes — its ServiceAccount only has `get/list/watch` on a handful of resources. See [Section 14](#14-management-tool-dashboard).
 
 ---
 
@@ -203,17 +231,20 @@ All services are accessible via NodePort on the k3s-server IP. You must be conne
 |---------|-----|----------|----------|
 | **Gitea** | http://10.24.36.10:30080 | `gitea_admin` | `OrangeKuma2025!` |
 | **Gitea SSH** | `ssh://git@10.24.36.10:30022` | — | (SSH key auth) |
-| **Drone CI** | http://10.24.36.10:30081 | (Gitea OAuth) | (login via Gitea) |
-| **Argo CD** | http://10.24.36.10:30082 | `admin` | `nglzMT1U1LTDANG2` |
+| **Drone CI** | http://10.24.36.10 | (Gitea OAuth) | (login via Gitea) |
+| **Argo CD** | http://10.24.36.10:30082 | `admin` | (auto-generated) |
 | **Grafana** | http://10.24.36.10:30083 | `admin` | `OrangeKuma2025!` |
 | **Semaphore** | http://10.24.36.10:30084 | `admin` | `OrangeKuma2025!` |
 | **Alertmanager** | http://10.24.36.10:30085 | — | (no auth) |
 | **Headlamp** | http://10.24.36.10:30086 | — | (token auth, see below) |
+| **Management Tool** | http://10.24.36.10:30087 | — | (no auth; read-only dashboard) |
 | **Prometheus** | http://10.24.36.10:30090 | — | (no auth) |
+
+Drone is exposed via a `LoadBalancer` Service on port 80 (k3s ServiceLB binds it to the node IP) rather than a NodePort. Per-customer Orange Kuma admin credentials are set at provision time (`admin` / the password entered in the Semaphore form) and bootstrapped into the instance automatically on first boot.
 
 **Headlamp token:** saved at `/tmp/headlamp-token.txt` on CE01. Copy-paste it into the Headlamp login page.
 
-**Argo CD password:** auto-generated during installation. The password shown above was generated on May 10, 2026. If the cluster is redeployed, a new password will be generated and shown in the Ansible output. You can also retrieve it with:
+**Argo CD password:** auto-generated during installation and printed at the end of the deploy. If the cluster is redeployed, a new password is generated. You can retrieve it with:
 
 ```bash
 ssh debian@10.24.36.10 "sudo kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
@@ -223,19 +254,22 @@ ssh debian@10.24.36.10 "sudo kubectl -n argocd get secret argocd-initial-admin-s
 
 ## 9. Network Policies & Security
 
-Each Orange Kuma customer instance gets its own namespace (`customer-<name>`) with the following NetworkPolicies:
+### Namespace isolation
 
-1. **Default deny ingress** — nothing can reach pods unless explicitly allowed.
-2. **Default deny egress** — pods can only resolve DNS by default.
-3. **Allow Orange Kuma traffic** — the Orange Kuma pod can receive incoming traffic (NodePort) and make outbound HTTP/HTTPS to the internet (needed for uptime monitoring). It is explicitly blocked from reaching other namespaces (pod CIDR `10.42.0.0/16` and service CIDR `10.43.0.0/16` are excluded from allowed egress).
-4. **Allow Prometheus scraping** — the monitoring namespace can reach port 3001 in customer namespaces for metrics collection.
+Each Orange Kuma customer instance gets its own namespace (`customer-<slug>`), labelled `app=orange-kuma`, `customer=<slug>`, and `provisioned-by=<sales|ops>`. The rendered manifest (`ansible/templates/customer-instance.yml.j2`) ships a single `deny-cross-customer` NetworkPolicy that:
 
-This means:
-- Customer A cannot access Customer B's pods or data.
-- Customer pods cannot access internal services (Gitea, Drone, etc.).
-- Monitoring still works across all namespaces.
+- **Blocks cross-customer ingress** — a pod in one `customer-*` namespace cannot reach another customer's pods. Namespaces carrying a *different* `customer` label are denied.
+- **Allows platform/monitoring ingress** — namespaces without a `customer` label (e.g. `monitoring`, ingress controllers) and the customer's own namespace can still reach the instance, so Prometheus scraping and external access keep working.
 
-In a production environment with more resources, we would additionally use node taints and tolerations to physically separate customer workloads from infrastructure services.
+This means Customer A cannot access Customer B's pods or data, while monitoring and the platform still function.
+
+### Read-only control plane
+
+Provisioning writes happen **only** through the GitOps path (Semaphore → Gitea → Argo CD). The Management Tool dashboard's RBAC is strictly read-only (`get/list/watch` on namespaces, pods, services, deployments) — it can render status but never mutate the cluster. There is no component in the customer-facing path with write access to the cluster outside of Argo CD's reconciliation.
+
+### Production hardening (out of scope at this scale)
+
+In a production environment with more resources, this would be combined with dedicated node pools (taints/tolerations) and default-deny egress for full workload separation. At 6 vCPU total, namespace isolation plus the read-only control plane is the practical, defensible choice.
 
 ---
 
@@ -256,17 +290,19 @@ Or to destroy everything and redeploy:
 ./deploy.sh --destroy-first
 ```
 
-The deploy script runs three phases:
+The deploy script runs four phases:
 
 1. **Phase 1** (`create-vms.yml`) — Create 3 VMs on Proxmox with cloud-init.
 2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents.
-3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl.
+3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp).
+4. **Phase 4** (`setup-cicd-pipeline.yml`) — Wire CI/CD + GitOps: Gitea org/repos, Drone pipelines, Argo CD AppProject + Applications, Image Updater config, the Semaphore provisioning project, and the Management Tool dashboard.
 
 You can also resume from a specific phase if an earlier phase already completed:
 
 ```bash
 ./deploy.sh --phase 2   # Skip VM creation
 ./deploy.sh --phase 3   # Skip VMs and k3s, just deploy services
+./deploy.sh --phase 4   # Only (re)run the CI/CD + GitOps + Semaphore wiring
 ```
 
 All playbooks are idempotent — running them again won't break anything.
@@ -287,6 +323,10 @@ The `debian-12-generic-amd64.qcow2` image has very limited package repos. Packag
 
 Kubernetes auto-injects environment variables for services (e.g., `SEMAPHORE_PORT=tcp://10.43.x.x:3000`). This conflicts with Semaphore's own config which expects `SEMAPHORE_PORT=3000`. The fix is naming the Kubernetes Service `semaphore-ui` instead of `semaphore`.
 
+### Semaphore encryption-key drift
+
+Semaphore encrypts its BoltDB credential store with `SEMAPHORE_ACCESS_KEY_ENCRYPTION`. An early version of the playbook generated this key fresh on every Ansible run, so a re-run produced a key that could not decrypt the existing (persisted) DB → CrashLoopBackOff. The fix: the key is generated once and persisted in the `semaphore-secrets` Kubernetes Secret; subsequent runs read the existing value back instead of regenerating it (same idempotent pattern used for the Drone admin token). Re-running Phase 3 no longer breaks Semaphore.
+
 ### Headlamp Helm repo URL
 
 The Headlamp project moved from `https://headlamp-k8s.github.io/headlamp/` to `https://kubernetes-sigs.github.io/headlamp/`. The bootstrap playbook uses the correct URL.
@@ -301,53 +341,152 @@ ssh-keygen -f '/root/.ssh/known_hosts' -R '10.24.36.10'
 
 ---
 
-## 12. Customer Provisioning
+## 12. Customer Provisioning (GitOps)
 
-New Orange Kuma instances are deployed per customer using:
+Provisioning is fully GitOps-driven and usable by non-ops staff. Nobody runs `kubectl` against the cluster — a form submission becomes a Git commit, and Argo CD does the rest.
 
-```bash
-ansible-playbook playbooks/provision-customer-management.yml
+### The flow
+
+```
+Semaphore template ─► provision-customer.yml ─► commit manifest to Gitea
+   (sales/ops UI)        (renders Jinja)          (customer-instances /
+                                                    test-customers repo)
+                                                          │
+                                          Argo CD watches both repos
+                                                          ▼
+                              reconciles customer-<slug> namespace into k3s
 ```
 
-Or via the Semaphore UI (intended for the verkoper — no CLI required).
+1. A staff member opens **Semaphore** (`:30084`), runs **"Nieuwe klant aanmaken"** (sales) or **"Testklant aanmaken"** (ops), and fills in name / email / admin password / optional domain.
+2. The shared `provision-customer.yml` playbook renders `ansible/templates/customer-instance.yml.j2` and commits it as `customers/<slug>.yaml` to a Gitea repo — `customer-instances` (sales lane) or `test-customers` (ops lane).
+3. **Argo CD** watches both repos (`directory.recurse`) and reconciles the new `customer-<slug>` namespace into the cluster within ~30–60s.
+4. The Orange Kuma container boots, self-creates its admin user from the provisioned password, and auto-creates an HTTPS monitor for the supplied domain (if any) — no manual setup wizard. See [Section 13](#13-orange-kuma-image-customizations).
 
-This creates:
-- A namespace `customer-acme`
-- NetworkPolicies for isolation
-- An Orange Kuma deployment with persistent storage
-- A NodePort service (auto-assigned port)
-- A ServiceMonitor for Prometheus auto-discovery
-- An Argo CD Application for GitOps management
+### Two lanes, one playbook
 
-To remove a customer:
+Both Semaphore templates call the same `provision-customer.yml`, parameterized by `target_repo`. This keeps the logic DRY while separating production (sales) customers from throwaway test (ops) customers into different repos and different Argo CD Applications. The `provisioned-by` label (`sales`/`ops`) is stamped onto each namespace so the dashboard and operators can tell the lanes apart.
+
+### What the rendered manifest contains
+
+For each `customer-<slug>` namespace, `customer-instance.yml.j2` produces:
+
+- **Namespace** — labelled `app=orange-kuma`, `customer=<slug>`, `provisioned-by=<lane>`, annotated with `orange-kuma/customer-email`.
+- **Secret `kuma-admin`** — holds `UPTIME_KUMA_ADMIN_PASSWORD` for the instance's admin bootstrap.
+- **PersistentVolumeClaim `kuma-data`** — 1 Gi, `local-path` storage, mounted at `/app/data`.
+- **Deployment `kuma`** — the Orange Kuma image from the Gitea registry, port 3001, with `CUSTOMER_NAME` / `CUSTOMER_EMAIL` / `CUSTOMER_DOMAIN` env and the admin password from the Secret.
+- **Service `kuma`** — ClusterIP on 3001 (an Ingress/NodePort can be layered on later).
+- **NetworkPolicy `deny-cross-customer`** — ingress isolation as described in [Section 9](#9-network-policies--security).
+
+### Manual / CLI use
+
+The same playbook can be driven directly for testing:
 
 ```bash
-ansible-playbook playbooks/remove-customer.yml -e customer_name=acme
+ansible-playbook playbooks/provision-customer.yml \
+  -e customer_name=acme \
+  -e customer_email=test@acme.io \
+  -e admin_password=Test1234 \
+  -e customer_domain=acme.example.com \
+  -e target_repo=test-customers
 ```
 
-Requires typing a confirmation string to prevent accidental deletion.
+`customer_name` is validated against `^[a-z0-9-]{3,32}$` and `customer_domain` (optional) against a hostname regex. The task commits to Gitea idempotently (POST for a new file, PUT with the existing `sha` for an update). To remove a customer, delete its `customers/<slug>.yaml` from the repo (or use `playbooks/remove-customer.yml`); Argo CD's `prune: true` then tears down the namespace.
+
+> **Note:** `provision-customer-management.yml` is a legacy playbook from the pre-GitOps era. Current provisioning flows exclusively through Semaphore → `provision-customer.yml` → Argo CD.
 
 ---
 
-## 13. File Structure
+## 13. Orange Kuma Image Customizations
+
+The customer-facing container is a lightly customized fork of Uptime Kuma (repo `orange-uptime-kuma`, built and pushed to the Gitea registry by Drone). Two startup behaviours make the GitOps flow fully hands-off — no web setup wizard, no manual monitor entry.
+
+Both run inside `server/server.js` as best-effort, idempotent steps (wrapped in try/catch so a failure never blocks the server from starting):
+
+### Admin bootstrap
+
+On startup, before the HTTP server begins listening, the image reads `UPTIME_KUMA_ADMIN_PASSWORD` (and optional `UPTIME_KUMA_ADMIN_USER`, default `admin`). If no user exists yet in the database, it creates the admin account from those values and flips Kuma's `needSetup` flag off. This is what lets a freshly provisioned instance be usable immediately with the password entered in the Semaphore form — the operator never sees the setup wizard.
+
+### Auto-created HTTPS monitor
+
+After monitors start, the image reads `CUSTOMER_DOMAIN`. If set (and a user exists to own the monitor), it ensures exactly one HTTP monitor for `https://<CUSTOMER_DOMAIN>`: it checks whether a monitor with that URL already exists, and if not, creates one (type `http`, 60s interval) and starts it on the live scheduler. Re-running on every boot is safe — the URL check keeps it idempotent. An empty `CUSTOMER_DOMAIN` (the default) creates no monitor, so the minimal provisioning path still works.
+
+`CUSTOMER_DOMAIN` is threaded all the way through: the Semaphore survey form → `provision-customer.yml` → `customer-instance.yml.j2` env block → the running container.
+
+---
+
+## 14. Management Tool Dashboard
+
+The Management Tool (namespace `orange-kuma`, NodePort `30087`, repo `orange-uptime-kuma-management-tool`) is a Node.js/Express app that originally *provisioned* customers via `kubectl`. It has been **pivoted to a strictly read-only customer health dashboard** — provisioning now belongs to Semaphore, and Git is the source of truth.
+
+### What it shows
+
+One branded Orange Kuma page listing every `customer-*` namespace (selected by the `app=orange-kuma` label), one row per customer, aggregating three sources:
+
+- **Cluster state** (k8s API) — pod phase (Running/Pending/Failed), restart counts, deployment replica counts, namespace age, the `customer` and `provisioned-by` labels, and the contact email annotation.
+- **Argo CD state** (Argo CD REST API) — the matching lane Application's sync status (Synced/OutOfSync) and health (Healthy/Progressing/Degraded). Because there are two umbrella Applications (one per lane), each customer maps to its lane's Application.
+- **GitOps state** (Gitea API) — the latest commit (author, message, sha, timestamp) on the customer's `customers/<slug>.yaml` file.
+
+A **"Nieuwe klant aanmaken"** button deep-links into the Semaphore sales template URL — the sales rep clicks from the dashboard and lands directly in the form. The page auto-refreshes every 15s. All three integrations are wrapped in try/catch so the dashboard still renders if any backend is briefly unreachable.
+
+### Why read-only
+
+The dashboard never mutates the cluster. Its ServiceAccount ClusterRole is shrunk to `get/list/watch` on `namespaces`, `pods`, `services` (core) and `deployments` (apps) — all write verbs and the old PVC/NetworkPolicy rules are gone. You can verify:
+
+```bash
+kubectl auth can-i create namespaces \
+  --as=system:serviceaccount:orange-kuma:management-tool
+# -> no
+```
+
+### Wiring
+
+`k8s/management-tool/deployment.yml` carries the Deployment, Service, ServiceAccount, the read-only ClusterRole/Binding, and a ConfigMap with `GITEA_URL`, `GITEA_ORG`, `ARGOCD_API_URL` (`http://argocd-server.argocd.svc`, plaintext — the server runs insecure), and `SEMAPHORE_NEW_CUSTOMER_URL`. Phase 4 mints a read-only Argo CD API token (account `dashboard`, role `role:readonly`) and stores it in the `management-tool-argocd` Secret, which the pod mounts as `ARGOCD_TOKEN` (optional). The `better-sqlite3` dependency and the old local `customers` table were removed — nothing is tracked locally anymore.
+
+---
+
+## 15. Auto-Update Strategy
+
+A tiered policy balances automation where it's safe against stability where it isn't. Full detail in [`docs/auto-update-strategy.md`](docs/auto-update-strategy.md).
+
+| Tier | Scope | Update mechanism |
+|------|-------|------------------|
+| **A** | Customer Orange Kuma instances | **Automatic.** Argo CD Image Updater watches the Gitea registry; new image builds are committed back to the GitOps repo and reconciled by Argo CD. |
+| **B** | Platform apps deployed from Git | Automatic via Argo CD sync (selfHeal), bounded by what's committed. |
+| **C** | Helm-installed platform services | **Pinned.** Gitea, Argo CD, kube-prometheus-stack, Headlamp, Semaphore (and the Image Updater chart) install at explicit versions; bumping requires reading upstream release notes and a destroy-first test run. |
+| **D** | k3s / node OS | **Manual.** Cluster and OS upgrades are deliberate, operator-driven actions. |
+
+Tier A in practice: when Drone publishes a new `orange-uptime-kuma` image, the `customer-instances` and `test-customers` Applications (annotated with `argocd-image-updater.argoproj.io/...`, `write-back-method: git`) get every `customers/*.yaml` rewritten with the new image, committed by `argocd-image-updater`, and rolled out to each customer Deployment by Argo CD. The pinned versions (Tier C) are the reason a re-run of the playbooks can't silently pull a breaking upstream chart.
+
+---
+
+## 16. File Structure
 
 ```
-k3s-platform/
-├── deploy.sh                              # One-command greenfield deployment
+project-cloud/
+├── deploy.sh                              # One-command greenfield deployment (4 phases)
 ├── README.md                              # Quick-start guide
 ├── DOCUMENTATION.md                       # This file
+├── docs/
+│   └── auto-update-strategy.md            # Tiered auto-update policy (A–D)
 ├── ansible/
 │   ├── ansible.cfg                        # Ansible configuration
-│   ├── inventory.yml                      # All hosts and variables
+│   ├── inventory.yml                      # Proxmox + k3s hosts
+│   ├── group_vars/
+│   │   └── all.yml                        # IPs, ports, credentials (single source)
 │   ├── site.yml                           # Master playbook (all phases)
-│   └── playbooks/
-│       ├── create-vms.yml                 # Phase 1: Create VMs on Proxmox
-│       ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
-│       ├── install-k3s.yml                # Phase 2: Install k3s cluster
-│       ├── bootstrap-platform.yml         # Phase 3: Deploy all services
-│       ├── provision-customer-management.yml  # Deploy Orange Kuma Management Portaal
-│       └── remove-customer.yml            # Remove customer instance
+│   ├── playbooks/
+│   │   ├── create-vms.yml                 # Phase 1: Create VMs on Proxmox
+│   │   ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
+│   │   ├── install-k3s.yml                # Phase 2: Install k3s cluster
+│   │   ├── bootstrap-platform.yml         # Phase 3: Deploy platform services
+│   │   ├── setup-cicd-pipeline.yml        # Phase 4: CI/CD + GitOps + Semaphore + MT
+│   │   ├── provision-customer.yml         # Shared backend for both Semaphore templates
+│   │   ├── provision-customer-management.yml  # Legacy (pre-GitOps), unused
+│   │   └── remove-customer.yml            # Remove a customer instance
+│   └── templates/
+│       └── customer-instance.yml.j2       # Rendered per-customer GitOps manifest
 └── k8s/
-    └── orange-kuma/
-        └── customer-template.yml          # Template for customer deployments
+    └── management-tool/
+        ├── deployment.yml                 # MT dashboard: Deployment/Service/RBAC/ConfigMap
+        └── PIVOT-NOTES.md                 # Rationale for the read-only pivot
 ```

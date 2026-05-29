@@ -17,7 +17,13 @@
 #     -e customer_name=acme \
 #     -e customer_email=admin@acme.example \
 #     -e admin_password=ChangeMe123 \
+#     -e customer_domain=acme.example.com \
 #     -e target_repo=test-customers
+#
+# customer_domain is optional. When supplied, the rendered manifest
+# passes it to the kuma container, which auto-creates an HTTPS monitor
+# for https://<domain> on startup. Omit it to provision without a
+# pre-seeded monitor.
 #
 # Runs from the same host that runs the rest of phase 3/4 (the
 # k3s_server VM has localhost access to Gitea on port 30080).
@@ -41,6 +47,9 @@
     target_repo: customer-instances
     provisioned_by: "{{ 'sales' if target_repo == 'customer-instances' else 'ops' }}"
     manifest_path: "customers/{{ customer_name }}.yaml"
+    # Optional. Empty by default - the template renders an empty
+    # CUSTOMER_DOMAIN and the kuma image skips monitor auto-creation.
+    customer_domain: ""
     # Always reach Gitea via the node-routable NodePort. This works
     # both from the k3s_server host (NodePort on localhost) and from
     # inside a pod (NodePort via the node IP on the pod network).
@@ -70,6 +79,16 @@
         that:
           - target_repo in ['customer-instances', 'test-customers']
         fail_msg: "target_repo must be 'customer-instances' or 'test-customers'."
+
+    - name: Validate customer_domain looks like a hostname (when set)
+      ansible.builtin.assert:
+        that:
+          - customer_domain is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$')
+        fail_msg: >
+          customer_domain must be a valid lowercase hostname
+          (e.g. acme.example.com). Leave it empty to skip monitor
+          auto-creation.
+      when: customer_domain | length > 0
 
     - name: Render customer manifest in-memory
       ansible.builtin.set_fact:
@@ -120,6 +139,7 @@
         msg: |
           Customer '{{ customer_name }}' provisioned via GitOps.
           - Lane:       {{ provisioned_by }} ({{ target_repo }})
+          - Monitor:    {{ ('https://' + customer_domain + ' (auto-created on first boot)') if customer_domain | length > 0 else 'none (no customer_domain supplied)' }}
           - Manifest:   http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ target_repo }}/src/branch/main/{{ manifest_path }}
           - Namespace:  customer-{{ customer_name }} (created by Argo CD within ~30s)
           - Argo CD:    http://{{ k3s_server_ip }}:{{ argocd_port }}/applications/{{ target_repo }}

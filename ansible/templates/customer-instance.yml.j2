@@ -7,6 +7,8 @@
 #   customer_name       - lowercase slug, [a-z0-9-]{3,32}
 #   customer_email      - contact email, used for audit + commit msg
 #   admin_password      - Uptime Kuma admin password for this customer
+#   customer_domain     - optional; if set, the kuma image auto-creates
+#                          an HTTPS monitor for https://<domain> on boot
 #   provisioned_by      - "sales" (customer-instances repo) or
 #                          "ops"   (test-customers repo)
 #   k3s_server_ip       - inherited from group_vars/all.yml
@@ -85,6 +87,10 @@ spec:
               value: "{{ customer_name }}"
             - name: CUSTOMER_EMAIL
               value: "{{ customer_email }}"
+            # When set, the kuma image auto-creates an HTTPS monitor for
+            # this domain on startup (idempotent). Empty = no monitor.
+            - name: CUSTOMER_DOMAIN
+              value: "{{ customer_domain | default('') }}"
             - name: UPTIME_KUMA_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
