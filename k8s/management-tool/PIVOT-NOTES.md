@@ -1,9 +1,10 @@
 # Management Tool pivot — from provisioning UI to customer health dashboard
 
-Status: **direction agreed, refactor pending** in the
-`orange-uptime-kuma-management-tool` repo. This document captures the
-target shape so the team can land the refactor in a single coherent
-pass.
+Status: **refactor landed** in the `orange-uptime-kuma-management-tool`
+repo (read-only dashboard: k8s + Argo CD + Gitea reads, Semaphore
+deep-link, no write paths). This document captures the target shape that
+was implemented; the RBAC shrink and Argo CD API wiring live in
+`k8s/management-tool/deployment.yml`.
 
 ---
 

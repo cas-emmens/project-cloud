@@ -1,9 +1,12 @@
 ---
 # k8s/management-tool/deployment.yml
-# Deployment van de Orange Kuma Management Tool voor het marketing-team.
+# Deployment van de Orange Kuma Management Tool.
 #
-# Doel: verkopers kunnen via deze webomgeving Orange Kuma instanties uitrollen voor klanten.
-# De app praat direct met de Kubernetes API via de bijgeleverde ClusterRole.
+# Doel: een READ-ONLY klant-gezondheidsdashboard. Provisioning gebeurt
+# via Semaphore -> Argo CD (GitOps); deze tool muteert niets. Het leest
+# de cluster-status (k8s API), de sync/health (Argo CD API) en de laatste
+# commit per klant (Gitea API), en linkt door naar Semaphore om nieuwe
+# klanten aan te maken.
 #
 # Image gebouwd door Drone CI vanuit:
 #   orange/orange-uptime-kuma-management-tool
@@ -30,27 +33,17 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: management-tool
+# Read-only. Het dashboard rendert alleen status; het schrijft nooit naar
+# de cluster. Alle create/patch/update/delete-rechten zijn verwijderd.
 rules:
-  # Namespace-beheer voor klant-deployments (delete nodig voor deprovisioning via DELETE /api/customers/:id)
+  # Klant-namespaces en hun pods/services uitlezen voor het overzicht.
   - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "create", "delete"]
-  # Deployments voor klant-instanties aanmaken/bijwerken/verwijderen
+    resources: ["namespaces", "pods", "services"]
+    verbs: ["get", "list", "watch"]
+  # Replica-counts van de kuma-deployment per klant uitlezen.
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "create", "patch", "update", "delete"]
-  # Services en PVCs voor klant-instanties
-  - apiGroups: [""]
-    resources: ["services", "persistentvolumeclaims"]
-    verbs: ["get", "list", "create", "patch", "update", "delete"]
-  # NetworkPolicies voor namespace-isolatie
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list", "create", "patch", "update", "delete"]
-  # Pod-status opvragen voor health monitoring
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -73,13 +66,19 @@ metadata:
   name: management-tool-config
   namespace: orange-kuma
 data:
+  # Gitea: gebruikt om de laatste commit per klant-manifest te tonen.
   GITEA_URL: "http://10.24.36.10:30080"
+  GITEA_ORG: "orange"
   DRONE_URL: "http://10.24.36.10:30081"
+  # Semaphore: de "Nieuwe klant aanmaken"-knop linkt hierheen. Vervang
+  # dit door een deep-link naar de sales-template zodra de project- en
+  # template-id's bekend zijn, bv:
+  #   http://10.24.36.10:30084/project/<id>/template/<id>
   SEMAPHORE_URL: "http://10.24.36.10:30084"
+  SEMAPHORE_NEW_CUSTOMER_URL: "http://10.24.36.10:30084"
+  # Argo CD: UI-link plus de in-cluster API voor sync/health-status.
   ARGOCD_URL: "http://10.24.36.10:30082"
-  # Image dat de management tool uitrolt voor klant-Orange Kuma instanties
-  KUMA_IMAGE: "10.24.36.10:30080/orange/orange-uptime-kuma:latest"
-  K8S_NAMESPACE: "orange-kuma"
+  ARGOCD_API_URL: "http://argocd-server.argocd.svc"
 
 ---
 apiVersion: apps/v1
@@ -112,9 +111,17 @@ spec:
           envFrom:
             - configMapRef:
                 name: management-tool-config
-          volumeMounts:
-            - name: data
-              mountPath: /app/data
+          env:
+            # Read-only Argo CD API token (applications get/list). Minted
+            # by setup-cicd-pipeline.yml into the management-tool-argocd
+            # Secret. Optional: without it the dashboard still renders and
+            # simply shows "n.v.t." in the Argo CD column.
+            - name: ARGOCD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: management-tool-argocd
+                  key: token
+                  optional: true
           resources:
             requests:
               memory: "128Mi"
@@ -136,9 +143,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
-      volumes:
-        - name: data
-          emptyDir: {}
 
 ---
 apiVersion: v1
