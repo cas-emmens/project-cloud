@@ -960,6 +960,8 @@
         kubectl -n orange-kuma create secret generic management-tool-argocd \
           --from-literal=token="${TOKEN}" \
           --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
       register: argocd_dashboard_token
       changed_when: "'exists' not in argocd_dashboard_token.stdout"
 
