@@ -155,6 +155,11 @@
       ansible.builtin.set_fact:
         drone_admin_token: "{{ drone_token_raw.stdout }}"
 
+    # The Gitea API is reached over the NodePort (localhost:30080), so a
+    # transient kube-proxy/NodePort blip on the server->agent path can make
+    # a single request fail with "Connection refused" even though Gitea is
+    # healthy. Every Gitea API task below uses retries/until so one flaky
+    # request does not abort the whole play.
     - name: Check if Gitea organization exists
       ansible.builtin.uri:
         url: "http://localhost:{{ gitea_http_port }}/api/v1/orgs/{{ gitea_org }}"
@@ -163,6 +168,9 @@
         force_basic_auth: true
         status_code: [200, 404]
       register: org_check
+      retries: 10
+      delay: 6
+      until: org_check.status in [200, 404]
 
     - name: Create Gitea organization
       ansible.builtin.uri:
@@ -179,6 +187,9 @@
         status_code: 201
       when: org_check.status == 404
       register: org_create
+      retries: 10
+      delay: 6
+      until: org_create.status == 201
 
     - name: Log organization status
       ansible.builtin.debug:
@@ -194,6 +205,9 @@
         force_basic_auth: true
         status_code: [200, 404]
       register: repo_checks
+      retries: 10
+      delay: 6
+      until: repo_checks.status in [200, 404]
       loop: "{{ repos }}"
 
     - name: Fail if existing repositories are not mirrors and recreation is disabled
@@ -254,6 +268,9 @@
           recreate_imported_repos_as_mirrors | bool
         )
       register: repo_imports
+      retries: 10
+      delay: 6
+      until: repo_imports.status == 201
 
     - name: Wait for repositories to be available (migration is async)
       ansible.builtin.uri:
@@ -317,6 +334,10 @@
           description: "Ops-provisioned test customer instances"
       loop_control:
         label: "{{ item.name }}"
+      register: gitops_repo_create
+      retries: 10
+      delay: 6
+      until: gitops_repo_create.status in [201, 409]
       changed_when: false
 
     - name: List existing Gitea tokens for admin user
@@ -327,6 +348,9 @@
         force_basic_auth: true
         status_code: [200]
       register: gitea_existing_tokens
+      retries: 10
+      delay: 6
+      until: gitea_existing_tokens.status == 200
       changed_when: false
 
     - name: Delete existing drone-oauth token in Gitea if present
@@ -357,6 +381,9 @@
             - "write:admin"
         status_code: [201]
       register: gitea_drone_pat
+      retries: 10
+      delay: 6
+      until: gitea_drone_pat.status == 201
 
     - name: Delete existing argocd-gitops token in Gitea if present
       ansible.builtin.uri:
@@ -383,6 +410,9 @@
             - "read:repository"
         status_code: [201]
       register: gitea_argocd_pat
+      retries: 10
+      delay: 6
+      until: gitea_argocd_pat.status == 201
 
     - name: Inject Gitea OAuth token into Drone database to enable repo sync
       ansible.builtin.shell: |
