@@ -937,11 +937,22 @@
           --namespace kube-system \
           --version {{ headlamp_chart_version }} \
           --set service.type=NodePort \
-          --set service.nodePort={{ headlamp_port }} \
           --set clusterRoleBinding.create=true \
           --wait --timeout 6m
       register: headlamp_install
       changed_when: "'has been upgraded' in headlamp_install.stdout or 'has been installed' in headlamp_install.stdout"
+
+    # The Headlamp chart (v{{ headlamp_chart_version }}) does not honour a
+    # service.nodePort value, so it leaves the NodePort unpinned and k3s
+    # assigns a random one in 30000-32767. Patch it to the documented port
+    # ({{ headlamp_port }}) so the README address (http://<node>:{{ headlamp_port }})
+    # is always reachable and stable across redeploys.
+    - name: Pin Headlamp Service to the documented NodePort
+      shell: |
+        kubectl -n kube-system patch svc headlamp --type=json \
+          -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":{{ headlamp_port }}}]'
+      register: headlamp_np_patch
+      changed_when: "'patched' in headlamp_np_patch.stdout"
 
     - name: Create Headlamp admin service account
       shell: |
