@@ -71,10 +71,18 @@
         helm repo update
       changed_when: false
 
-    # Timeout is 10m (not 5m): on a freshly destroyed cluster the first-time
-    # image pulls (Gitea + PostgreSQL + memcached) over the school network
-    # regularly exceed 5m and trip "context deadline exceeded". Re-running is
-    # idempotent — helm upgrade --install resumes the existing release.
+    # We disable the chart's bundled Bitnami subcharts (PostgreSQL HA and
+    # Redis cluster) and run Gitea on its built-in SQLite with in-process
+    # cache/queue. Two reasons:
+    #   1) Bitnami removed the old versioned images this chart pins
+    #      (docker.io/bitnami/postgresql:16.3.0-debian-12-r23 and
+    #      bitnami/redis-cluster:7.2.5-debian-12-r4 now 404 on Docker Hub),
+    #      so the subcharts ImagePullBackOff and the install never readies.
+    #   2) At this scale (single-node school cluster) we don't need an HA
+    #      Postgres + 3-node Redis — SQLite is officially supported and
+    #      keeps Gitea (incl. the container registry) fully functional.
+    # Timeout is 10m: first-time image pulls on a cold cluster over the
+    # school network can exceed the chart default. Re-running is idempotent.
     - name: Install Gitea
       shell: |
         helm upgrade --install gitea gitea-charts/gitea \
@@ -91,12 +99,14 @@
           --set gitea.config.server.SSH_PORT={{ gitea_ssh_port }} \
           --set gitea.config.server.SSH_LISTEN_PORT=22 \
           --set gitea.config.webhook.ALLOWED_HOST_LIST=* \
+          --set gitea.config.database.DB_TYPE=sqlite3 \
           --set persistence.enabled=true \
           --set persistence.size=5Gi \
           --set persistence.storageClass=local-path \
           --set postgresql-ha.enabled=false \
-          --set postgresql.enabled=true \
-          --set postgresql.primary.persistence.storageClass=local-path \
+          --set postgresql.enabled=false \
+          --set redis-cluster.enabled=false \
+          --set redis.enabled=false \
           --wait --timeout 10m
       register: gitea_install
       changed_when: "'has been upgraded' in gitea_install.stdout or 'has been installed' in gitea_install.stdout"
