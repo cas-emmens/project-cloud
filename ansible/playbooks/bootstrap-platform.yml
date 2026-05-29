@@ -848,7 +848,8 @@
                 "survey_vars": [
                   {"name":"customer_name","title":"Klantnaam (slug)","description":"3-32 tekens, kleine letters/cijfers/streepjes","type":"","required":true},
                   {"name":"customer_email","title":"Email","description":"Contactadres van de klant","type":"","required":true},
-                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true}
+                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true},
+                  {"name":"customer_domain","title":"Domein (optioneel)","description":"Domein om automatisch te monitoren (bv. klant.example.com). Laat leeg om geen monitor aan te maken.","type":"","required":false}
                 ]
               }'
       register: semaphore_tpl_sales_create
@@ -876,7 +877,8 @@
                 "survey_vars": [
                   {"name":"customer_name","title":"Klantnaam (slug)","description":"3-32 tekens, kleine letters/cijfers/streepjes","type":"","required":true},
                   {"name":"customer_email","title":"Email","description":"Contactadres van de klant","type":"","required":true},
-                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true}
+                  {"name":"admin_password","title":"Uptime Kuma admin wachtwoord","description":"Initieel wachtwoord voor de admin login van de klant","type":"","required":true},
+                  {"name":"customer_domain","title":"Domein (optioneel)","description":"Domein om automatisch te monitoren (bv. klant.example.com). Laat leeg om geen monitor aan te maken.","type":"","required":false}
                 ]
               }'
       register: semaphore_tpl_ops_create
