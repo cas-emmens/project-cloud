@@ -513,6 +513,13 @@
                 image: {{ semaphore_image }}
                 ports:
                 - containerPort: 3000
+                readinessProbe:
+                  httpGet:
+                    path: /api/ping
+                    port: 3000
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  failureThreshold: 30
                 env:
                 - name: SEMAPHORE_DB_DIALECT
                   value: bolt
@@ -559,7 +566,12 @@
         apiVersion: v1
         kind: Service
         metadata:
-          name: semaphore
+          # Named semaphore-ui, NOT semaphore. A Service named "semaphore"
+          # would make k8s inject SEMAPHORE_PORT=tcp://<clusterIP>:3000 into
+          # every pod in this namespace. Semaphore reads SEMAPHORE_PORT as its
+          # own listen port and expects a bare number, so the tcp:// value
+          # makes it fail to bind and crash-loop.
+          name: semaphore-ui
           namespace: semaphore
         spec:
           type: NodePort
