@@ -768,6 +768,15 @@
         kubectl -n argocd rollout status deploy/argocd-image-updater --timeout=120s
       changed_when: false
 
+    # The AppProject destination namespace below is '*', not 'customer-*'.
+    # Each Application's own destination.namespace is empty (every committed
+    # manifest carries its own customer-<slug> namespace, and
+    # CreateNamespace=true creates them), and 'customer-*' does not match the
+    # empty string, so Argo CD would reject the Application with
+    # InvalidSpecError before it ever reads the repo. Scope is still tight:
+    # sourceRepos limits the input to the two customer repos,
+    # clusterResourceWhitelist allows only Namespace, and
+    # namespaceResourceWhitelist allows only the kinds the template ships.
     - name: Apply Argo CD AppProject for customer provisioning
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
@@ -781,15 +790,6 @@
           sourceRepos:
             - http://gitea-http.gitea.svc:3000/{{ gitea_org }}/customer-instances.git
             - http://gitea-http.gitea.svc:3000/{{ gitea_org }}/test-customers.git
-          # Namespace must be '*', not 'customer-*'. Each Application's own
-          # destination.namespace is empty (every committed manifest carries
-          # its own customer-<slug> namespace, and CreateNamespace=true makes
-          # them), and 'customer-*' does not match the empty string — Argo CD
-          # would reject the Application with InvalidSpecError before it ever
-          # reads the repo. Scope is still tight: sourceRepos limits the input
-          # to the two customer repos, clusterResourceWhitelist allows only
-          # Namespace, and namespaceResourceWhitelist allows only the kinds
-          # the customer template ships.
           destinations:
             - namespace: '*'
               server: https://kubernetes.default.svc
