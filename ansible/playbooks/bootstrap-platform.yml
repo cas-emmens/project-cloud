@@ -508,11 +508,26 @@
               labels:
                 app: semaphore
             spec:
+              # A Service named "semaphore" makes Kubernetes inject
+              # SEMAPHORE_PORT=tcp://<clusterIP>:3000 into this container.
+              # Semaphore reads SEMAPHORE_PORT as its own listen port and
+              # expects a bare number (e.g. 3000), so the tcp:// value makes
+              # it fail to bind and crash-loop. Disabling service links stops
+              # all such *_SERVICE_*/*_PORT env injection. (Same pattern used
+              # by the customer kuma pods.)
+              enableServiceLinks: false
               containers:
               - name: semaphore
                 image: {{ semaphore_image }}
                 ports:
                 - containerPort: 3000
+                readinessProbe:
+                  httpGet:
+                    path: /api/ping
+                    port: 3000
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  failureThreshold: 30
                 env:
                 - name: SEMAPHORE_DB_DIALECT
                   value: bolt
