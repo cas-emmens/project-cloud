@@ -139,6 +139,7 @@
         msg: |
           Customer '{{ customer_name }}' provisioned via GitOps.
           - Lane:       {{ provisioned_by }} ({{ target_repo }})
+          - Dashboard:  https://{{ customer_name }}.{{ domain_suffix }} (via ingress-nginx, self-signed TLS)
           - Monitor:    {{ ('https://' + customer_domain + ' (auto-created on first boot)') if customer_domain | length > 0 else 'none (no customer_domain supplied)' }}
           - Manifest:   http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ target_repo }}/src/branch/main/{{ manifest_path }}
           - Namespace:  customer-{{ customer_name }} (created by Argo CD within ~30s)

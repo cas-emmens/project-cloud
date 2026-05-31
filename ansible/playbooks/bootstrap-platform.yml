@@ -31,6 +31,7 @@
     argocd_image_updater_chart_version: "0.11.0"
     prometheus_stack_chart_version: "65.1.1"
     headlamp_chart_version: "0.27.0"
+    ingress_nginx_chart_version: "4.11.3"
     semaphore_image: "semaphoreui/semaphore:v2.10.34"
 
   tasks:
@@ -60,6 +61,7 @@
         - monitoring
         - semaphore
         - orange-kuma
+        - ingress-nginx
       changed_when: false
 
     # =========================================
@@ -1014,6 +1016,41 @@
           -o jsonpath="{.data.token}" | base64 -d
       register: headlamp_token
       changed_when: false
+
+    # =========================================
+    # INGRESS CONTROLLER (per-customer external access)
+    # =========================================
+    # Customer Uptime Kuma instances are provisioned as ClusterIP Services
+    # (see templates/customer-instance.yml.j2), so they need an ingress
+    # controller to be reachable from outside the cluster. k3s was installed
+    # with --disable=traefik, so we run ingress-nginx instead.
+    #
+    # The controller Service is a LoadBalancer exposing ONLY 443 (HTTPS).
+    # Port 80 is deliberately left disabled because Drone already holds the
+    # node's host port 80 via its own LoadBalancer (k3s ServiceLB / klipper
+    # binds host 80 for drone-server); a second LoadBalancer requesting 80
+    # would stay pending. 443 is free, so klipper binds host 443 here and each
+    # customer is reachable at a port-less URL: https://<customer>.{{ domain_suffix }}
+    # nip.io resolves that host to {{ k3s_server_ip }}, so no external DNS is
+    # needed. TLS is served with ingress-nginx's built-in self-signed
+    # certificate (browsers show a warning; acceptable for this platform).
+    - name: Add ingress-nginx Helm repo
+      shell: |
+        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+        helm repo update
+      changed_when: false
+
+    - name: Install ingress-nginx
+      shell: |
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+          --namespace ingress-nginx \
+          --version {{ ingress_nginx_chart_version }} \
+          --set controller.service.type=LoadBalancer \
+          --set controller.service.enableHttp=false \
+          --set controller.service.enableHttps=true \
+          --wait --timeout 6m
+      register: ingress_nginx_install
+      changed_when: "'has been upgraded' in ingress_nginx_install.stdout or 'has been installed' in ingress_nginx_install.stdout"
 
     # =========================================
     # SUMMARY
