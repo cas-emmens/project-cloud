@@ -360,6 +360,15 @@
         helm repo update
       changed_when: false
 
+    # timeout.reconciliation controls how often the application-controller
+    # re-reads Git when there is no webhook. The chart default is 180s, so a
+    # freshly provisioned customer could take up to 3 minutes to appear even
+    # though the Applications have automated sync. We drop it to 30s so a
+    # Semaphore commit is picked up and deployed within ~30s without anyone
+    # clicking Refresh in the UI. (A Gitea push webhook is not used because
+    # Gitea's payload reports its public ROOT_URL host, which does not
+    # normalize-match the in-cluster service repoURL the Applications clone
+    # from, so the webhook would refresh nothing.)
     - name: Install Argo CD
       shell: |
         helm upgrade --install argocd argo/argo-cd \
@@ -369,6 +378,7 @@
           --set server.service.nodePortHttp={{ argocd_port }} \
           --set server.extraArgs[0]=--insecure \
           --set configs.params."server\.insecure"=true \
+          --set configs.cm."timeout\.reconciliation"=30s \
           --wait --timeout 10m
       register: argocd_install
       changed_when: "'has been upgraded' in argocd_install.stdout or 'has been installed' in argocd_install.stdout"
@@ -377,6 +387,16 @@
       shell: |
         kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
       changed_when: false
+
+    # The application-controller reads timeout.reconciliation at startup, not
+    # at runtime, so on an upgrade where the value changed it must be
+    # restarted to apply the new interval. Harmless on a fresh install.
+    - name: Restart Argo CD application-controller to apply reconciliation interval
+      shell: |
+        kubectl -n argocd rollout restart statefulset/argocd-application-controller
+        kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
+      when: argocd_install.changed
+      changed_when: true
 
     - name: Get Argo CD initial admin password
       shell: |
