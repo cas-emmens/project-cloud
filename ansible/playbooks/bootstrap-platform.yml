@@ -443,11 +443,56 @@
         helm repo update
       changed_when: false
 
+    # Grafana provisioning is made explicit instead of relying on the
+    # chart defaults: we write a values file that (1) provisions the
+    # Prometheus + Alertmanager datasources directly into Grafana's
+    # provisioning dir (no dependency on the datasource sidecar, which is
+    # why the datasource previously had to be added by hand), and (2) keeps
+    # the dashboard sidecar on and watching ALL namespaces so both the
+    # bundled kube/node dashboards and our own labelled dashboard
+    # ConfigMaps are loaded automatically.
+    - name: Render Grafana provisioning values file
+      copy:
+        dest: /tmp/grafana-values.yaml
+        mode: "0644"
+        content: |
+          grafana:
+            defaultDashboardsEnabled: true
+            sidecar:
+              datasources:
+                enabled: false
+              dashboards:
+                enabled: true
+                label: grafana_dashboard
+                labelValue: "1"
+                searchNamespace: ALL
+                provider:
+                  foldersFromFilesStructure: true
+            datasources:
+              datasources.yaml:
+                apiVersion: 1
+                datasources:
+                  - name: Prometheus
+                    uid: prometheus
+                    type: prometheus
+                    access: proxy
+                    url: http://prometheus-kube-prometheus-prometheus.monitoring:9090
+                    isDefault: true
+                  - name: Alertmanager
+                    uid: alertmanager
+                    type: alertmanager
+                    access: proxy
+                    url: http://prometheus-kube-prometheus-alertmanager.monitoring:9093
+                    jsonData:
+                      implementation: prometheus
+      changed_when: false
+
     - name: Install kube-prometheus-stack
       shell: |
         helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
           --namespace monitoring \
           --version {{ prometheus_stack_chart_version }} \
+          -f /tmp/grafana-values.yaml \
           --set grafana.service.type=NodePort \
           --set grafana.service.nodePort={{ grafana_port }} \
           --set grafana.adminPassword={{ gitea_admin_password }} \
@@ -466,6 +511,25 @@
           --wait --timeout 15m
       register: prometheus_install
       changed_when: "'has been upgraded' in prometheus_install.stdout or 'has been installed' in prometheus_install.stdout"
+
+    # Custom platform dashboard: copied to the node and wrapped in a
+    # ConfigMap carrying the grafana_dashboard=1 label so the Grafana
+    # dashboard sidecar imports it automatically (no manual upload).
+    - name: Copy Orange platform dashboard JSON to the node
+      copy:
+        src: files/orange-platform-dashboard.json
+        dest: /tmp/orange-platform-dashboard.json
+        mode: "0644"
+
+    - name: Create/refresh the Orange platform Grafana dashboard ConfigMap
+      shell: |
+        kubectl -n monitoring create configmap orange-platform-dashboard \
+          --from-file=orange-platform.json=/tmp/orange-platform-dashboard.json \
+          --dry-run=client -o yaml | kubectl apply -f -
+        kubectl -n monitoring label configmap orange-platform-dashboard \
+          grafana_dashboard=1 --overwrite
+      register: orange_dashboard_cm
+      changed_when: "'configured' in orange_dashboard_cm.stdout or 'created' in orange_dashboard_cm.stdout"
 
     # =========================================
     # SEMAPHORE (Ansible UI)
