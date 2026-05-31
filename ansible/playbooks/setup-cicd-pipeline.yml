@@ -837,6 +837,8 @@
               kind: Deployment
             - group: networking.k8s.io
               kind: NetworkPolicy
+            - group: networking.k8s.io
+              kind: Ingress
         EOF
       changed_when: false
 
