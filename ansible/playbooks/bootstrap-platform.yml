@@ -863,6 +863,7 @@
           -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/templates" \
           -d '{
                 "name": "Nieuwe klant aanmaken",
+                "app": "ansible",
                 "project_id": {{ semaphore_project_id }},
                 "inventory_id": {{ semaphore_inventory_id }},
                 "repository_id": {{ semaphore_repo_id }},
@@ -892,6 +893,7 @@
           -X POST "http://localhost:{{ semaphore_port }}/api/project/{{ semaphore_project_id }}/templates" \
           -d '{
                 "name": "Testklant aanmaken",
+                "app": "ansible",
                 "project_id": {{ semaphore_project_id }},
                 "inventory_id": {{ semaphore_inventory_id }},
                 "repository_id": {{ semaphore_repo_id }},
