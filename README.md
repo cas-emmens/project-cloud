@@ -80,6 +80,22 @@ export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)"
 ./deploy.sh --phase 4   # Only (re)run the CI/CD + GitOps + Semaphore wiring
 ```
 
+## Retrieving login secrets after a deploy
+
+A few credentials are generated during the deploy and only live in
+Kubernetes secrets. Run these on the k3s server (`KUBECONFIG` already
+points at `/etc/rancher/k3s/k3s.yaml`):
+
+```bash
+# Drone admin token
+kubectl -n drone get secret drone-secrets \
+  -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' | base64 -d; echo
+
+# Headlamp login token
+kubectl -n kube-system get secret headlamp-admin-token \
+  -o jsonpath='{.data.token}' | base64 -d; echo
+```
+
 ## Playbooks
 
 | Playbook | Phase | Description |
