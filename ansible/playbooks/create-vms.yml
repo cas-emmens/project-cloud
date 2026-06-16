@@ -6,7 +6,6 @@
 #   ansible-playbook playbooks/create-vms.yml
 #
 # Prerequisites:
-#   - debian-12-generic-amd64.qcow2 on each Proxmox node at /var/lib/vz/template/iso/
 #   - SSH public key set via SSH_PUBLIC_KEY env var
 #   - Proxmox password set via PROXMOX_PASSWORD env var
 
@@ -24,6 +23,14 @@
       debug:
         msg: "VM {{ vm_id }} ({{ vm_name }}) already exists, skipping creation"
       when: vm_exists.rc == 0
+
+    - name: Download Debian 12 cloud image if not present
+      get_url:
+        url: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2
+        dest: "{{ base_image }}"
+        mode: "0644"
+        timeout: 300
+      register: image_download
 
     - name: Create VM from cloud-init image
       when: vm_exists.rc != 0
