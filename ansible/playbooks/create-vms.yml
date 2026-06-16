@@ -14,6 +14,18 @@
   hosts: proxmox_nodes
   gather_facts: false
   tasks:
+    - name: Check if base image exists
+      stat:
+        path: "{{ base_image }}"
+      register: base_image_stat
+
+    - name: Download Debian 12 cloud image
+      get_url:
+        url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+        dest: "{{ base_image }}"
+        mode: "0644"
+      when: not base_image_stat.stat.exists
+
     - name: Check if VM already exists
       shell: "qm status {{ vm_id }} 2>/dev/null"
       register: vm_exists
