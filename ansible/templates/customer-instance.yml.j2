@@ -74,6 +74,8 @@ spec:
         customer: {{ customer_name }}
     spec:
       enableServiceLinks: false
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: kuma
           image: {{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma:latest
