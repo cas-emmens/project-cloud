@@ -87,6 +87,55 @@ aan de Semaphore environment JSON.
 Nodes in de test inventory hernoemd van `CE01/CE02/CE3` naar `pve2/pve3/pve4` zodat
 de naam overeenkomt met het laatste octet van het IP-adres (`10.24.35.2` → `pve2`).
 
+**group_vars gesplitst in gedeeld en omgevingsspecifiek** (`9ffb4a4` → `63ed486`)
+
+`ansible/group_vars/all.yml` is her-aangemaakt met uitsluitend gedeelde variabelen
+(poorten, Gitea-credentials). De inventory group_vars bevatten alleen
+omgevingsspecifieke waarden (`k3s_server_ip`, `domain_suffix`, `dns_servers`,
+`semaphore_repo_branch`).
+
+Reden: `provision-customer.yml` draait vanuit Semaphore zonder inventory en laadt
+vars via `vars_files: ../group_vars/all.yml`. Zonder dit bestand ontbraken poorten
+en credentials, wat leidde tot `gitea_http_port is undefined`. De gedeelde vars
+moeten ook in de inventory group_vars staan omdat Ansible die file niet automatisch
+laadt voor reguliere playbooks (Ansible zoekt group_vars in de inventory-directory
+en de playbook-directory, niet in `ansible/`).
+
+**deploy.sh omgevingsonafhankelijk gemaakt** (`4245182` → `aa7f9bd` → `2762dcd`)
+
+- `--inventory` flag toegevoegd (default: `inventories/hanze`), doorgegeven aan alle
+  `ansible-playbook` aanroepen inclusief `destroy-vms.yml`
+- `clear_vm_host_keys` leest VM-IPs dynamisch uit `vm_ip:` velden in de inventory
+  in plaats van hardcoded `10.24.36.x` adressen
+- `hanze_prox.pub` toegevoegd als eerste optie in SSH-key detectie (Proxmox genereert
+  altijd `id_rsa` wat op test-omgevingen de verkeerde key zou selecteren)
+
+**Phase 4 summary leesbaar gemaakt in Semaphore** (`88bb5f9`)
+
+De `msg: |` multiline block werd door Semaphore als JSON-string getoond met letterlijke
+`\n` tekens. Vervangen door een YAML-lijst zodat elke URL op een eigen regel staat.
+Alle service URLs toegevoegd die eerder ontbraken (Argo CD, Semaphore, Grafana,
+Headlamp, Prometheus).
+
+**Longhorn distributed storage toegevoegd** (`2ec8102` → `f9b0847`)
+
+`local-path` (node-lokale opslag) vervangen door Longhorn (gedistribueerde opslag
+met replicatie over nodes). Bij een node-uitval kunnen pods op een andere node
+herstarten met hun data intact.
+
+- `install-k3s.yml`: `open-iscsi` en `qemu-guest-agent` installeren op alle nodes
+- `bootstrap-platform.yml`: Longhorn Helm chart toegevoegd vóór de andere services,
+  `local-path` als default StorageClass uitgezet
+- Alle 7 `local-path` referenties vervangen door `longhorn`
+
+**Documentatie bijgewerkt** (`27a3fe1`)
+
+- Architectuurdiagram toegevoegd (`docs/architecture.md`) met infrastructuur,
+  services en beide flows (GitOps + CI/CD)
+- `DOCUMENTATION.md` bijgewerkt: Longhorn als storage-keuze, multi-environment
+  inventory structuur, nieuwe deploy.sh syntax, onjuist "Minimal Debian cloud image"
+  known issue verwijderd
+
 ---
 
 ### Openstaande punten voor overleg
