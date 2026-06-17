@@ -23,3 +23,7 @@ prometheus_port: 30090
 gitea_admin_user: gitea_admin
 gitea_admin_password: "OrangeKuma2025!"
 gitea_org: orange
+
+# ─── Semaphore repository ─────────────────────────────────────────────────────
+semaphore_repo_url: "https://github.com/cas-emmens/project-cloud.git"
+semaphore_repo_branch: "main"

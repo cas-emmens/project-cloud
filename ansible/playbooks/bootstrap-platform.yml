@@ -806,8 +806,8 @@
           -d '{
                 "name": "project-cloud",
                 "project_id": {{ semaphore_project_id }},
-                "git_url": "https://github.com/cas-emmens/project-cloud.git",
-                "git_branch": "main",
+                "git_url": "{{ semaphore_repo_url }}",
+                "git_branch": "{{ semaphore_repo_branch }}",
                 "ssh_key_id": {{ semaphore_none_key_id }}
               }'
       register: semaphore_repo_create
@@ -888,7 +888,7 @@
                 "name": "sales",
                 "project_id": {{ semaphore_project_id }},
                 "password": null,
-                "json": "{\"target_repo\":\"customer-instances\"}",
+                "json": "{\"target_repo\":\"customer-instances\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\"}",
                 "env": "{}"
               }'
       register: semaphore_env_sales_create
@@ -907,7 +907,7 @@
                 "name": "ops",
                 "project_id": {{ semaphore_project_id }},
                 "password": null,
-                "json": "{\"target_repo\":\"test-customers\"}",
+                "json": "{\"target_repo\":\"test-customers\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\"}",
                 "env": "{}"
               }'
       register: semaphore_env_ops_create
