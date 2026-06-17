@@ -47,9 +47,11 @@ The rubric awards bonus points for running Argo CD on Kubernetes. Since we need 
 - **GitOps** — Argo CD can manage all services, not just Orange Kuma.
 - **Rubric alignment** — "Zeer goed" for Deployment requires "Applicatie in containers."
 
-### Why local-path storage instead of Longhorn/Ceph?
+### Why Longhorn instead of Ceph?
 
-We initially planned Longhorn for distributed storage, but the Debian 12 cloud image doesn't include `open-iscsi` (a Longhorn dependency) and the minimal repos on the school network don't provide it. k3s ships with the `local-path` provisioner by default, which stores persistent volumes on the node's local disk. This is sufficient for our use case — we're not running a production HA database. Ceph was removed because it consumed too many resources (~7 GB RAM per node) for our limited hardware.
+The platform uses **Longhorn** for distributed storage. Longhorn replicates PersistentVolumes across nodes so a pod can restart on a different node after a node failure without losing data. It is installed via Helm in Phase 3 and requires `open-iscsi` on every node, which is available in the standard Debian 12 repository.
+
+Ceph was considered but removed — it consumes ~7 GB RAM per node, which exceeds the available headroom on the school hardware (23 GB per node, already partially used by k3s services).
 
 ### Why namespace isolation instead of node separation?
 
@@ -154,6 +156,16 @@ k3s ships with the `local-path` provisioner as the default StorageClass. All Per
 ## 7. Platform Services
 
 All services are deployed by `playbooks/bootstrap-platform.yml`. It installs Helm on the k3s server, creates namespaces, then deploys each service.
+
+### Longhorn (namespace: `longhorn-system`)
+
+Distributed block storage. Installed via the official Longhorn Helm chart before all other services. Replaces the k3s default `local-path` provisioner as the default StorageClass. Provides:
+
+- **Replication** — each PersistentVolume is replicated across nodes (default: 3 replicas), so a pod survives a node failure with its data intact.
+- **Volume expansion** — PVCs can be resized without recreating the pod.
+- **Web UI** — accessible via `kubectl port-forward` in the `longhorn-system` namespace.
+
+Requires `open-iscsi` installed and `iscsid` running on every node (handled by `install-k3s.yml`).
 
 ### Gitea (namespace: `gitea`)
 
@@ -278,23 +290,24 @@ In a production environment with more resources, this would be combined with ded
 The entire platform can be deployed from scratch with a single command:
 
 ```bash
-cd /root/k3s-platform
+cd /root/project-cloud
 export PROXMOX_PASSWORD="your-password"
-export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
-./deploy.sh
+./deploy.sh                              # Hanze cluster (default)
+./deploy.sh --inventory inventories/test # Test cluster
 ```
 
-Or to destroy everything and redeploy:
+The script auto-detects the SSH key from `~/.ssh/hanze_prox.pub`, `~/.ssh/id_ed25519.pub`, or `~/.ssh/id_rsa.pub` (in that order). To destroy everything and redeploy:
 
 ```bash
 ./deploy.sh --destroy-first
+./deploy.sh --inventory inventories/test --destroy-first
 ```
 
 The deploy script runs four phases:
 
 1. **Phase 1** (`create-vms.yml`) — Create 3 VMs on Proxmox with cloud-init.
-2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents.
-3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp).
+2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents. Installs `open-iscsi` and `qemu-guest-agent` on all nodes.
+3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Longhorn, Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp).
 4. **Phase 4** (`setup-cicd-pipeline.yml`) — Wire CI/CD + GitOps: Gitea org/repos, Drone pipelines, Argo CD AppProject + Applications, Image Updater config, the Semaphore provisioning project, and the Management Tool dashboard.
 
 You can also resume from a specific phase if an earlier phase already completed:
@@ -314,10 +327,6 @@ All playbooks are idempotent — running them again won't break anything.
 ### DNS resolution on VMs
 
 The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the `10.24.36.0/24` network. The Proxmox nodes themselves use `1.1.1.1`. We configured the VMs to use `8.8.8.8` via cloud-init and `systemd-resolved`. If DNS stops working after a reboot, check `/etc/resolv.conf` on the VMs.
-
-### Minimal Debian cloud image
-
-The `debian-12-generic-amd64.qcow2` image has very limited package repos. Packages like `open-iscsi`, `nfs-common`, and `apt-transport-https` are not available. This is why we use `local-path` storage instead of Longhorn. Only `curl` is installed as a prerequisite for k3s.
 
 ### Semaphore service name conflict
 
@@ -466,14 +475,21 @@ project-cloud/
 ├── deploy.sh                              # One-command greenfield deployment (4 phases)
 ├── README.md                              # Quick-start guide
 ├── DOCUMENTATION.md                       # This file
+├── CHANGELOG.md                           # Branch-level change log
 ├── docs/
-│   └── auto-update-strategy.md            # Tiered auto-update policy (A–D)
+│   ├── auto-update-strategy.md            # Tiered auto-update policy (A–D)
+│   └── architecture.md                    # Infrastructure + flow diagrams
 ├── ansible/
 │   ├── ansible.cfg                        # Ansible configuration
-│   ├── inventory.yml                      # Proxmox + k3s hosts
 │   ├── group_vars/
-│   │   └── all.yml                        # IPs, ports, credentials (single source)
-│   ├── site.yml                           # Master playbook (all phases)
+│   │   └── all.yml                        # Gedeelde vars: poorten, Gitea-credentials
+│   ├── inventories/
+│   │   ├── hanze/
+│   │   │   ├── inventory.yml              # Hanze cluster (10.24.36.x)
+│   │   │   └── group_vars/all.yml         # Hanze-specifieke vars: IPs, semaphore branch
+│   │   └── test/
+│   │       ├── inventory.yml              # Test cluster (10.24.35.x)
+│   │       └── group_vars/all.yml         # Test-specifieke vars: IPs, semaphore branch
 │   ├── playbooks/
 │   │   ├── create-vms.yml                 # Phase 1: Create VMs on Proxmox
 │   │   ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
@@ -487,6 +503,6 @@ project-cloud/
 │       └── customer-instance.yml.j2       # Rendered per-customer GitOps manifest
 └── k8s/
     └── management-tool/
-        ├── deployment.yml                 # MT dashboard: Deployment/Service/RBAC/ConfigMap
+        ├── deployment.yml.j2              # MT dashboard: Deployment/Service/RBAC/ConfigMap
         └── PIVOT-NOTES.md                 # Rationale for the read-only pivot
 ```
