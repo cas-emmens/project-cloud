@@ -49,6 +49,30 @@
       when: not helm_binary.stat.exists
 
     # =========================================
+    # LONGHORN (Distributed Storage)
+    # =========================================
+    - name: Add Longhorn Helm repo
+      shell: |
+        helm repo add longhorn https://charts.longhorn.io
+        helm repo update
+      changed_when: false
+
+    - name: Install Longhorn
+      shell: |
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace longhorn-system \
+          --create-namespace \
+          --wait --timeout 10m
+      register: longhorn_install
+      changed_when: "'has been upgraded' in longhorn_install.stdout or 'has been installed' in longhorn_install.stdout"
+
+    - name: Remove longhorn as default StorageClass
+      shell: |
+        kubectl patch storageclass longhorn \
+          -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+      changed_when: false
+
+    # =========================================
     # NAMESPACES
     # =========================================
     - name: Create namespaces
@@ -104,7 +128,7 @@
           --set gitea.config.database.DB_TYPE=sqlite3 \
           --set persistence.enabled=true \
           --set persistence.size=5Gi \
-          --set persistence.storageClass=local-path \
+          --set persistence.storageClass=longhorn \
           --set postgresql-ha.enabled=false \
           --set postgresql.enabled=false \
           --set redis-cluster.enabled=false \
@@ -271,7 +295,7 @@
           namespace: drone
         spec:
           accessModes: [ReadWriteOnce]
-          storageClassName: local-path
+          storageClassName: longhorn
           resources:
             requests:
               storage: 2Gi
@@ -497,16 +521,16 @@
           --set grafana.service.nodePort={{ grafana_port }} \
           --set grafana.adminPassword={{ gitea_admin_password }} \
           --set grafana.persistence.enabled=true \
-          --set grafana.persistence.storageClassName=local-path \
+          --set grafana.persistence.storageClassName=longhorn \
           --set grafana.persistence.size=2Gi \
           --set prometheus.service.type=NodePort \
           --set prometheus.service.nodePort={{ prometheus_port }} \
           --set prometheus.prometheusSpec.retention=7d \
-          --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName=local-path \
+          --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName=longhorn \
           --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=5Gi \
           --set alertmanager.service.type=NodePort \
           --set alertmanager.service.nodePort={{ alertmanager_port }} \
-          --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.storageClassName=local-path \
+          --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.storageClassName=longhorn \
           --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.resources.requests.storage=2Gi \
           --wait --timeout 15m
       register: prometheus_install
@@ -644,7 +668,7 @@
           namespace: semaphore
         spec:
           accessModes: [ReadWriteOnce]
-          storageClassName: local-path
+          storageClassName: longhorn
           resources:
             requests:
               storage: 1Gi

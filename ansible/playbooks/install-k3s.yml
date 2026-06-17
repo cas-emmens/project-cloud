@@ -18,7 +18,14 @@
       apt:
         name:
           - curl
+          - open-iscsi
         state: present
+
+    - name: Enable and start iscsid (Longhorn dependency)
+      systemd:
+        name: iscsid
+        enabled: yes
+        state: started
 
     - name: Load kernel modules for k3s
       modprobe:
