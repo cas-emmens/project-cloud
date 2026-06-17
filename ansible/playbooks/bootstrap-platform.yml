@@ -618,6 +618,8 @@
               labels:
                 app: semaphore
             spec:
+              securityContext:
+                fsGroup: 1001
               containers:
               - name: semaphore
                 image: {{ semaphore_image }}

@@ -27,17 +27,17 @@ all:
       hosts:
         pve2:
           ansible_host: 10.24.35.2
-          vm_id: 300
+          vm_id: 210
           vm_name: "k3s-server"
           vm_ip: "10.24.35.10"
         pve3:
           ansible_host: 10.24.35.3
-          vm_id: 301
+          vm_id: 211
           vm_name: "k3s-agent-1"
           vm_ip: "10.24.35.11"
         pve4:
           ansible_host: 10.24.35.4
-          vm_id: 302
+          vm_id: 212
           vm_name: "k3s-agent-2"
           vm_ip: "10.24.35.12"
 
