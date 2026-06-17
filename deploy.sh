@@ -43,15 +43,15 @@ check_prereqs() {
     fi
 
     if [ -z "${SSH_PUBLIC_KEY:-}" ]; then
-        if [ -f "$HOME/.ssh/id_rsa.pub" ]; then
-            export SSH_PUBLIC_KEY="$(cat "$HOME/.ssh/id_rsa.pub")"
-            log "Using SSH key from ~/.ssh/id_rsa.pub"
+        if [ -f "$HOME/.ssh/hanze_prox.pub" ]; then
+            export SSH_PUBLIC_KEY="$(cat "$HOME/.ssh/hanze_prox.pub")"
+            log "Using SSH key from ~/.ssh/hanze_prox.pub"
         elif [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
             export SSH_PUBLIC_KEY="$(cat "$HOME/.ssh/id_ed25519.pub")"
             log "Using SSH key from ~/.ssh/id_ed25519.pub"
-        elif [ -f "$HOME/.ssh/hanze_prox.pub" ]; then
-            export SSH_PUBLIC_KEY="$(cat "$HOME/.ssh/hanze_prox.pub")"
-            log "Using SSH key from ~/.ssh/hanze_prox.pub"
+        elif [ -f "$HOME/.ssh/id_rsa.pub" ]; then
+            export SSH_PUBLIC_KEY="$(cat "$HOME/.ssh/id_rsa.pub")"
+            log "Using SSH key from ~/.ssh/id_rsa.pub"
         else
             err "No SSH_PUBLIC_KEY set and no key found in ~/.ssh/"
         fi
