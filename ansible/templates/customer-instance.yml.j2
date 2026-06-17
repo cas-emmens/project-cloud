@@ -63,6 +63,8 @@ metadata:
     customer: {{ customer_name }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: orange-kuma

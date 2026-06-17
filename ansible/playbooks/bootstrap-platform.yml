@@ -237,6 +237,8 @@
           namespace: drone
         spec:
           replicas: 1
+          strategy:
+            type: Recreate
           selector:
             matchLabels:
               app: drone-server
@@ -610,6 +612,8 @@
           namespace: semaphore
         spec:
           replicas: 1
+          strategy:
+            type: Recreate
           selector:
             matchLabels:
               app: semaphore
