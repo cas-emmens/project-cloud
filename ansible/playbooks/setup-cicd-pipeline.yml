@@ -1012,29 +1012,18 @@
 
     - name: Print CI/CD pipeline setup summary
       ansible.builtin.debug:
-        msg: |
-          ============================================
-          Phase 4 — CI/CD Pipeline Setup Voltooid!
-          ============================================
-
-          Gitea Organisatie:
-            http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}
-
-          Repositories:
-          {% for repo in repos %}
-            {{ repo.name }}:
-              http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ repo.name }}
-          {% endfor %}
-
-          Drone CI Builds:
-            http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}
-
-          Management Tool (marketing UI):
-            http://{{ k3s_server_ip }}:{{ management_tool_port }}
-            Namespace: orange-kuma / deployment: management-tool
-
-          ============================================
-          Verificatie:
-            kubectl -n orange-kuma get deploy management-tool
-            kubectl -n orange-kuma get svc management-tool
-          ============================================
+        msg:
+          - "=== Phase 4 — CI/CD Pipeline Setup Voltooid! ==="
+          - ""
+          - "Gitea:          http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}"
+          - "Drone CI:       http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}"
+          - "Argo CD:        http://{{ k3s_server_ip }}:{{ argocd_port }}"
+          - "Semaphore:      http://{{ k3s_server_ip }}:{{ semaphore_port }}"
+          - "Management Tool:http://{{ k3s_server_ip }}:{{ management_tool_port }}"
+          - "Grafana:        http://{{ k3s_server_ip }}:{{ grafana_port }}"
+          - "Headlamp:       http://{{ k3s_server_ip }}:{{ headlamp_port }}"
+          - "Prometheus:     http://{{ k3s_server_ip }}:{{ prometheus_port }}"
+          - ""
+          - "Verificatie:"
+          - "  kubectl -n orange-kuma get deploy management-tool"
+          - "  kubectl -n orange-kuma get svc management-tool"
