@@ -136,6 +136,15 @@ herstarten met hun data intact.
   inventory structuur, nieuwe deploy.sh syntax, onjuist "Minimal Debian cloud image"
   known issue verwijderd
 
+**Deployment summaries verbeterd** (`9d5775a` → `382ac69`)
+
+Phase 3 summary omgezet van `msg: |` naar lijst (zelfde fix als Phase 4 eerder).
+Phase 4 summary uitgebreid tot volledige platformsamenvatting met alle URLs,
+gebruikersnamen, wachtwoorden en token-locaties. Na afloop van Phase 4 wordt de
+samenvatting ook weggeschreven naar `/root/platform-summary.txt` op de k3s-server
+(mode 0600, inclusief tijdstempel) zodat de toegangsgegevens beschikbaar blijven
+zonder de Ansible-output terug te hoeven zoeken.
+
 ---
 
 ### Openstaande punten voor overleg
