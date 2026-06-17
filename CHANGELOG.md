@@ -117,7 +117,7 @@ De `msg: |` multiline block werd door Semaphore als JSON-string getoond met lett
 Alle service URLs toegevoegd die eerder ontbraken (Argo CD, Semaphore, Grafana,
 Headlamp, Prometheus).
 
-**Longhorn distributed storage toegevoegd** (`2ec8102` → `f9b0847`)
+**Longhorn distributed storage** (`2ec8102` → `781ba1c`)
 
 `local-path` (node-lokale opslag) vervangen door Longhorn (gedistribueerde opslag
 met replicatie over nodes). Bij een node-uitval kunnen pods op een andere node
@@ -127,6 +127,32 @@ herstarten met hun data intact.
 - `bootstrap-platform.yml`: Longhorn Helm chart toegevoegd vóór de andere services,
   `local-path` als default StorageClass uitgezet
 - Alle 7 `local-path` referenties vervangen door `longhorn`
+
+Longhorn maakt nieuwe volumes aan als `root:root`. Containers die als niet-privileged
+user draaien hebben een `fsGroup` instelling nodig: de kubelet chownt de volume-mount
+dan naar de juiste GID zodat de container schrijfrechten heeft.
+
+- Semaphore: `fsGroup: 1001` (draait als `semaphore` user)
+- Uptime Kuma: `fsGroup: 1000` (draait als `node` user)
+- Drone Server: geen `fsGroup` nodig, draait als root
+
+Deployments met een ReadWriteOnce PVC krijgen `strategy: Recreate`. RollingUpdate
+veroorzaakt een deadlock bij RWO volumes: de nieuwe pod kan de PVC niet mounten
+zolang de oude hem vasthoudt, maar Kubernetes wacht met termineren totdat de nieuwe
+pod Ready is. Recreate termineert de oude pod eerst.
+
+**DNS-configuratie gecorrigeerd** (`f6deb11`)
+
+Cloud-init stelde de gateway (`10.24.35.1` / `10.24.36.1`) in als nameserver. De
+gateways doen geen DNS-forwarding, waardoor `apt` op verse VMs geen pakketbronnen
+kon bereiken en het `apt-get update` proces vastliep.
+
+- `nameserver` in beide inventories gewijzigd naar `1.1.1.1`
+- DNS-verificatietaak toegevoegd als eerste stap in `install-k3s.yml` via `getent
+  hosts deb.debian.org` met 12 pogingen — faalt met een duidelijke fout vóór apt
+  iets probeert
+- `apt upgrade` toegevoegd na `apt update`
+- Overbodige systemd-resolved taken en `dns_servers` variabelen verwijderd
 
 **Documentatie bijgewerkt** (`27a3fe1`)
 
@@ -144,31 +170,6 @@ gebruikersnamen, wachtwoorden en token-locaties. Na afloop van Phase 4 wordt de
 samenvatting ook weggeschreven naar `/root/platform-summary.txt` op de k3s-server
 (mode 0600, inclusief tijdstempel) zodat de toegangsgegevens beschikbaar blijven
 zonder de Ansible-output terug te hoeven zoeken.
-
-**DNS-configuratie gecorrigeerd** (`f6deb11`)
-
-Cloud-init stelde de gateway (`10.24.35.1` / `10.24.36.1`) in als nameserver. De
-gateways doen geen DNS-forwarding, waardoor `apt` op verse VMs geen pakketbronnen
-kon bereiken en het `apt-get update` proces vastliep.
-
-- `nameserver` in beide inventories gewijzigd naar `1.1.1.1`
-- DNS-verificatietaak toegevoegd als eerste stap in `install-k3s.yml` via `getent
-  hosts deb.debian.org` met 12 pogingen — faalt met een duidelijke fout vóór apt
-  iets probeert
-- `apt upgrade` toegevoegd na `apt update`
-- Overbodige systemd-resolved taken en `dns_servers` variabelen verwijderd
-
-**Longhorn volume permissions gecorrigeerd** (`44322f8` → `9db627e`)
-
-Longhorn formatteert nieuwe volumes als `root:root`. Containers die als een
-niet-privileged user draaien kunnen zonder expliciete `fsGroup` instelling niet
-schrijven naar een gemount Longhorn volume. In Kubernetes lost `fsGroup` dit op:
-de kubelet chownt de volume-mount recursief naar de opgegeven GID zodat de
-container-user schrijfrechten heeft zonder als root te draaien.
-
-- Semaphore (`fsGroup: 1001`) — container draait als `semaphore` user
-- Uptime Kuma (`fsGroup: 1000`) — container draait als `node` user
-- Drone Server heeft geen `fsGroup` nodig — draait als root
 
 **Test VM-IDs uitgelijnd met IP-adressen** (`44322f8`)
 
