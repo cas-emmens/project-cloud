@@ -1010,20 +1010,68 @@
           — bereikbaar op http://{{ k3s_server_ip }}:{{ mgmt_nodeport.stdout }}.
       when: mgmt_health is defined
 
+    - name: Get Argo CD admin password for final summary
+      ansible.builtin.shell: |
+        kubectl -n argocd get secret argocd-initial-admin-secret \
+          -o jsonpath='{.data.password}' | base64 -d
+      register: argocd_admin_password
+      changed_when: false
+
+    - name: Get Headlamp token for final summary
+      ansible.builtin.shell: |
+        kubectl -n kube-system get secret headlamp-admin-token \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: headlamp_admin_token
+      changed_when: false
+
     - name: Print CI/CD pipeline setup summary
       ansible.builtin.debug:
         msg:
-          - "=== Phase 4 — CI/CD Pipeline Setup Voltooid! ==="
+          - "================================================"
+          - "  Orange Kuma Platform — Deployment Voltooid!"
+          - "================================================"
           - ""
-          - "Gitea:          http://{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}"
-          - "Drone CI:       http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}"
-          - "Argo CD:        http://{{ k3s_server_ip }}:{{ argocd_port }}"
-          - "Semaphore:      http://{{ k3s_server_ip }}:{{ semaphore_port }}"
-          - "Management Tool:http://{{ k3s_server_ip }}:{{ management_tool_port }}"
-          - "Grafana:        http://{{ k3s_server_ip }}:{{ grafana_port }}"
-          - "Headlamp:       http://{{ k3s_server_ip }}:{{ headlamp_port }}"
-          - "Prometheus:     http://{{ k3s_server_ip }}:{{ prometheus_port }}"
+          - "--- Toegang ---"
           - ""
-          - "Verificatie:"
-          - "  kubectl -n orange-kuma get deploy management-tool"
-          - "  kubectl -n orange-kuma get svc management-tool"
+          - "Gitea:           http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
+          - "                 User: {{ gitea_admin_user }} / {{ gitea_admin_password }}"
+          - "                 SSH:  ssh://git@{{ k3s_server_ip }}:{{ gitea_ssh_port }}"
+          - ""
+          - "Drone CI:        http://{{ k3s_server_ip }}:{{ drone_port }}"
+          - "                 (Login via Gitea OAuth: {{ gitea_admin_user }} / {{ gitea_admin_password }})"
+          - ""
+          - "Argo CD:         http://{{ k3s_server_ip }}:{{ argocd_port }}"
+          - "                 User: admin / {{ argocd_admin_password.stdout }}"
+          - ""
+          - "Semaphore:       http://{{ k3s_server_ip }}:{{ semaphore_port }}"
+          - "                 User: admin / {{ gitea_admin_password }}"
+          - ""
+          - "Management Tool: http://{{ k3s_server_ip }}:{{ management_tool_port }}"
+          - "                 (geen auth — read-only dashboard)"
+          - ""
+          - "Grafana:         http://{{ k3s_server_ip }}:{{ grafana_port }}"
+          - "                 User: admin / {{ gitea_admin_password }}"
+          - ""
+          - "Headlamp:        http://{{ k3s_server_ip }}:{{ headlamp_port }}"
+          - "                 Token: /tmp/headlamp-token.txt op de k3s-server"
+          - "                 Ophalen: kubectl -n kube-system get secret headlamp-admin-token -o jsonpath='{.data.token}' | base64 -d"
+          - ""
+          - "Prometheus:      http://{{ k3s_server_ip }}:{{ prometheus_port }}"
+          - "Alertmanager:    http://{{ k3s_server_ip }}:{{ alertmanager_port }}"
+          - ""
+          - "--- Klant aanmaken ---"
+          - ""
+          - "Via Semaphore:   http://{{ k3s_server_ip }}:{{ semaphore_port }}"
+          - "                 Template: 'Nieuwe klant aanmaken' (sales)"
+          - "                 Template: 'Testklant aanmaken' (ops)"
+          - ""
+          - "Via CLI:         ansible-playbook playbooks/provision-customer.yml"
+          - "                   -e customer_name=<naam>"
+          - "                   -e customer_email=<email>"
+          - "                   -e admin_password=<wachtwoord>"
+          - ""
+          - "--- Kubeconfig ---"
+          - ""
+          - "Lokaal:          /tmp/kubeconfig-orange-kuma.yaml"
+          - "Op de server:    /etc/rancher/k3s/k3s.yaml"
+          - "================================================"
