@@ -419,7 +419,8 @@
         GITEA_TOKEN="{{ gitea_drone_pat.json.sha1 }}"
         GITEA_USER="{{ gitea_admin_user }}"
         DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
-          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')
+          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' \
+          | awk '{print $1}')
         kubectl -n drone exec "$DRONE_POD" -- \
           sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1"
         kubectl -n drone exec "$DRONE_POD" -- \
@@ -473,7 +474,8 @@
     - name: Ensure sqlite3 is available in Drone pod (lost on restart)
       ansible.builtin.shell: |
         DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
-          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')
+          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' \
+          | awk '{print $1}')
         kubectl -n drone exec "$DRONE_POD" -- \
           sh -c 'command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1'
       args:
@@ -483,7 +485,8 @@
     - name: Get Drone admin user_id from database
       ansible.builtin.shell: |
         DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
-          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')
+          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' \
+          | awk '{print $1}')
         kubectl -n drone exec "$DRONE_POD" -- \
           sqlite3 /data/database.sqlite \
           "SELECT user_id FROM users WHERE user_login='{{ gitea_admin_user }}'"
@@ -493,7 +496,8 @@
     - name: Insert each repo directly into Drone's repos table
       ansible.builtin.shell: |
         DRONE_POD=$(kubectl -n drone get pods -l app=drone-server \
-          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}')
+          -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' \
+          | awk '{print $1}')
         SIGNER=$(openssl rand -hex 16)
         SECRET=$(openssl rand -hex 16)
         NOW=$(date +%s)
