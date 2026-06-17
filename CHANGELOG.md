@@ -171,6 +171,14 @@ samenvatting ook weggeschreven naar `/root/platform-summary.txt` op de k3s-serve
 (mode 0600, inclusief tijdstempel) zodat de toegangsgegevens beschikbaar blijven
 zonder de Ansible-output terug te hoeven zoeken.
 
+**VM disk vergroot naar 100GB** (`7a07ede`)
+
+VM schijfgrootte in `create-vms.yml` verhoogd van 25GB naar 100GB. Longhorn
+maakt standaard 3 replicas per volume (één per node). Met 25GB schijven en
+meerdere services liep de beschikbare ruimte per node vol waardoor Longhorn
+geen nieuwe replicas kon aanmaken — nieuwe PVCs bleven direct `faulted` zonder
+replicas. 100GB geeft voldoende ruimte voor meerdere klantinstances.
+
 **Test VM-IDs uitgelijnd met IP-adressen** (`44322f8`)
 
 VM-IDs in de test inventory gewijzigd van 300/301/302 naar 210/211/212 zodat
