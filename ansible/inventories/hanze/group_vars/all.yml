@@ -1,12 +1,30 @@
 ---
-# group_vars/all.yml — Hanze-omgeving (omgevingsspecifieke variabelen)
-#
-# Gedeelde variabelen (poorten, Gitea-credentials) staan in ansible/group_vars/all.yml.
+# group_vars/all.yml — Hanze-omgeving
+
+# ─── Ansible ──────────────────────────────────────────────────────────────────
+ansible_python_interpreter: auto_silent
 
 # ─── Infrastructuur ───────────────────────────────────────────────────────────
 k3s_server_ip: "10.24.36.10"
 domain_suffix: "10.24.36.10.nip.io"
 dns_servers: "10.24.36.1 1.1.1.1"
+
+# ─── Service NodePort-toewijzingen ────────────────────────────────────────────
+gitea_http_port: 30080
+gitea_ssh_port: 30022
+drone_port: 80
+argocd_port: 30082
+grafana_port: 30083
+semaphore_port: 30084
+alertmanager_port: 30085
+headlamp_port: 30086
+management_tool_port: 30087
+prometheus_port: 30090
+
+# ─── Gitea ────────────────────────────────────────────────────────────────────
+gitea_admin_user: gitea_admin
+gitea_admin_password: "OrangeKuma2025!"
+gitea_org: orange
 
 # ─── Semaphore repository ─────────────────────────────────────────────────────
 semaphore_repo_url: "https://github.com/cas-emmens/project-cloud.git"
