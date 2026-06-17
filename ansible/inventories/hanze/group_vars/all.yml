@@ -2,6 +2,9 @@
 # group_vars/all.yml — Hanze-omgeving
 # Gedeelde platformvariabelen voor alle playbooks.
 
+# ─── Ansible ─────────────────────────────────────────────────────────────────
+ansible_python_interpreter: auto_silent
+
 # ─── Infrastructuur ───────────────────────────────────────────────────────────
 k3s_server_ip: "10.24.36.10"
 domain_suffix: "10.24.36.10.nip.io"
