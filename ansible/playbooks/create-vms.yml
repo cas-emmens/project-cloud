@@ -62,9 +62,9 @@
             qm set {{ vm_id }} \
               --scsi0 local-lvm:vm-{{ vm_id }}-disk-0,iothread=1,discard=on
 
-        - name: Resize disk to 25GB
+        - name: Resize disk to 100GB
           shell: |
-            qm resize {{ vm_id }} scsi0 25G
+            qm resize {{ vm_id }} scsi0 100G
 
         - name: Add cloud-init drive
           shell: |
