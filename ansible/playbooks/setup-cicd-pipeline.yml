@@ -1075,3 +1075,59 @@
           - "Lokaal:          /tmp/kubeconfig-orange-kuma.yaml"
           - "Op de server:    /etc/rancher/k3s/k3s.yaml"
           - "================================================"
+          - "Samenvatting opgeslagen in: /root/platform-summary.txt"
+
+    - name: Save platform summary to file
+      ansible.builtin.copy:
+        dest: /root/platform-summary.txt
+        mode: "0600"
+        content: |
+          ================================================
+          Orange Kuma Platform — Deployment Voltooid!
+          Gegenereerd: {{ ansible_date_time.iso8601 }}
+          ================================================
+
+          --- Toegang ---
+
+          Gitea:           http://{{ k3s_server_ip }}:{{ gitea_http_port }}
+                           User: {{ gitea_admin_user }} / {{ gitea_admin_password }}
+                           SSH:  ssh://git@{{ k3s_server_ip }}:{{ gitea_ssh_port }}
+
+          Drone CI:        http://{{ k3s_server_ip }}:{{ drone_port }}
+                           (Login via Gitea OAuth: {{ gitea_admin_user }} / {{ gitea_admin_password }})
+
+          Argo CD:         http://{{ k3s_server_ip }}:{{ argocd_port }}
+                           User: admin / {{ argocd_admin_password.stdout }}
+
+          Semaphore:       http://{{ k3s_server_ip }}:{{ semaphore_port }}
+                           User: admin / {{ gitea_admin_password }}
+
+          Management Tool: http://{{ k3s_server_ip }}:{{ management_tool_port }}
+                           (geen auth — read-only dashboard)
+
+          Grafana:         http://{{ k3s_server_ip }}:{{ grafana_port }}
+                           User: admin / {{ gitea_admin_password }}
+
+          Headlamp:        http://{{ k3s_server_ip }}:{{ headlamp_port }}
+                           Token: /tmp/headlamp-token.txt op de k3s-server
+                           Ophalen: kubectl -n kube-system get secret headlamp-admin-token -o jsonpath='{.data.token}' | base64 -d
+
+          Prometheus:      http://{{ k3s_server_ip }}:{{ prometheus_port }}
+          Alertmanager:    http://{{ k3s_server_ip }}:{{ alertmanager_port }}
+
+          --- Klant aanmaken ---
+
+          Via Semaphore:   http://{{ k3s_server_ip }}:{{ semaphore_port }}
+                           Template: 'Nieuwe klant aanmaken' (sales)
+                           Template: 'Testklant aanmaken' (ops)
+
+          Via CLI:         ansible-playbook playbooks/provision-customer.yml
+                             -e customer_name=<naam>
+                             -e customer_email=<email>
+                             -e admin_password=<wachtwoord>
+
+          --- Kubeconfig ---
+
+          Lokaal:          /tmp/kubeconfig-orange-kuma.yaml
+          Op de server:    /etc/rancher/k3s/k3s.yaml
+          ================================================
