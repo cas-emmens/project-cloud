@@ -179,6 +179,10 @@ meerdere services liep de beschikbare ruimte per node vol waardoor Longhorn
 geen nieuwe replicas kon aanmaken — nieuwe PVCs bleven direct `faulted` zonder
 replicas. 100GB geeft voldoende ruimte voor meerdere klantinstances.
 
+> ⚠️ **Let op:** elke Proxmox node heeft minimaal 100GB vrije local-lvm ruimte
+> nodig voor de VM schijf. Controleer de beschikbare ruimte vóór deployment
+> met `vgs` op de Proxmox nodes.
+
 **Test VM-IDs uitgelijnd met IP-adressen** (`44322f8`)
 
 VM-IDs in de test inventory gewijzigd van 300/301/302 naar 210/211/212 zodat
