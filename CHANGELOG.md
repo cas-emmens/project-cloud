@@ -145,6 +145,37 @@ samenvatting ook weggeschreven naar `/root/platform-summary.txt` op de k3s-serve
 (mode 0600, inclusief tijdstempel) zodat de toegangsgegevens beschikbaar blijven
 zonder de Ansible-output terug te hoeven zoeken.
 
+**DNS-configuratie gecorrigeerd** (`f6deb11`)
+
+Cloud-init stelde de gateway (`10.24.35.1` / `10.24.36.1`) in als nameserver. De
+gateways doen geen DNS-forwarding, waardoor `apt` op verse VMs geen pakketbronnen
+kon bereiken en het `apt-get update` proces vastliep.
+
+- `nameserver` in beide inventories gewijzigd naar `1.1.1.1`
+- DNS-verificatietaak toegevoegd als eerste stap in `install-k3s.yml` via `getent
+  hosts deb.debian.org` met 12 pogingen — faalt met een duidelijke fout vóór apt
+  iets probeert
+- `apt upgrade` toegevoegd na `apt update`
+- Overbodige systemd-resolved taken en `dns_servers` variabelen verwijderd
+
+**Longhorn volume permissions gecorrigeerd** (`44322f8` → `9db627e`)
+
+Longhorn formatteert nieuwe volumes als `root:root`. Containers die als een
+niet-privileged user draaien kunnen zonder expliciete `fsGroup` instelling niet
+schrijven naar een gemount Longhorn volume. In Kubernetes lost `fsGroup` dit op:
+de kubelet chownt de volume-mount recursief naar de opgegeven GID zodat de
+container-user schrijfrechten heeft zonder als root te draaien.
+
+- Semaphore (`fsGroup: 1001`) — container draait als `semaphore` user
+- Uptime Kuma (`fsGroup: 1000`) — container draait als `node` user
+- Drone Server heeft geen `fsGroup` nodig — draait als root
+
+**Test VM-IDs uitgelijnd met IP-adressen** (`44322f8`)
+
+VM-IDs in de test inventory gewijzigd van 300/301/302 naar 210/211/212 zodat
+het laatste cijfer van het VM-ID overeenkomt met het laatste octet van het
+IP-adres (`10.24.35.10` → VM 210). Hanze blijft op 300/301/302.
+
 ---
 
 ### Openstaande punten voor overleg
