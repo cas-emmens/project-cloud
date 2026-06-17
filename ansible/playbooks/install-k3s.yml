@@ -19,7 +19,14 @@
         name:
           - curl
           - open-iscsi
+          - qemu-guest-agent
         state: present
+
+    - name: Enable and start qemu-guest-agent
+      systemd:
+        name: qemu-guest-agent
+        enabled: yes
+        state: started
 
     - name: Enable and start iscsid (Longhorn dependency)
       systemd:
