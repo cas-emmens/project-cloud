@@ -9,10 +9,21 @@
   hosts: k3s_cluster
   become: true
   tasks:
+    - name: Verify DNS resolution
+      command: getent hosts deb.debian.org
+      changed_when: false
+      retries: 12
+      delay: 10
+      register: dns_check
+      until: dns_check.rc == 0
+
     - name: Update apt cache
       apt:
         update_cache: yes
-        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: yes
 
     - name: Install prerequisites
       apt:
@@ -62,28 +73,6 @@
         - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
         - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
         - { key: "net.ipv4.ip_forward", value: "1" }
-
-    - name: Ensure systemd-resolved drop-in directory exists
-      ansible.builtin.file:
-        path: /etc/systemd/resolved.conf.d
-        state: directory
-        mode: "0755"
-
-    - name: Ensure fallback DNS is configured via systemd-resolved
-      ansible.builtin.copy:
-        dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
-        content: |
-          [Resolve]
-          DNS={{ dns_servers }}
-          FallbackDNS=1.1.1.1 8.8.8.8
-        mode: "0644"
-      register: dns_config
-
-    - name: Restart systemd-resolved to apply DNS config
-      ansible.builtin.systemd:
-        name: systemd-resolved
-        state: restarted
-      when: dns_config.changed
 
 
 - name: Install k3s server

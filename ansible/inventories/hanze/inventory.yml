@@ -9,7 +9,7 @@ all:
     # Network config
     gateway: "10.24.36.1"
     netmask: "24"
-    nameserver: "10.24.36.1"
+    nameserver: "1.1.1.1"
     bridge: "vmbr0"
 
     # VM base image
