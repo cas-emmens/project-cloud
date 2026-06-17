@@ -12,7 +12,7 @@
 #   orange/orange-uptime-kuma-management-tool
 #
 # App luistert op poort 4000 (zie server.js: PORT env var, default 4000).
-# NodePort: 30087 — bereikbaar via http://10.24.36.10:30087
+# NodePort: 30087 — bereikbaar via http://{{ k3s_server_ip }}:30087
 
 apiVersion: v1
 kind: Namespace
@@ -67,17 +67,12 @@ metadata:
   namespace: orange-kuma
 data:
   # Gitea: gebruikt om de laatste commit per klant-manifest te tonen.
-  GITEA_URL: "http://10.24.36.10:30080"
-  GITEA_ORG: "orange"
-  DRONE_URL: "http://10.24.36.10:30081"
-  # Semaphore: de "Nieuwe klant aanmaken"-knop linkt hierheen. Vervang
-  # dit door een deep-link naar de sales-template zodra de project- en
-  # template-id's bekend zijn, bv:
-  #   http://10.24.36.10:30084/project/<id>/template/<id>
-  SEMAPHORE_URL: "http://10.24.36.10:30084"
-  SEMAPHORE_NEW_CUSTOMER_URL: "http://10.24.36.10:30084"
-  # Argo CD: UI-link plus de in-cluster API voor sync/health-status.
-  ARGOCD_URL: "http://10.24.36.10:30082"
+  GITEA_URL: "http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
+  GITEA_ORG: "{{ gitea_org }}"
+  DRONE_URL: "http://{{ k3s_server_ip }}:{{ drone_port }}"
+  SEMAPHORE_URL: "http://{{ k3s_server_ip }}:{{ semaphore_port }}"
+  SEMAPHORE_NEW_CUSTOMER_URL: "http://{{ k3s_server_ip }}:{{ semaphore_port }}"
+  ARGOCD_URL: "http://{{ k3s_server_ip }}:{{ argocd_port }}"
   ARGOCD_API_URL: "http://argocd-server.argocd.svc"
 
 ---
@@ -101,9 +96,7 @@ spec:
       serviceAccountName: management-tool
       containers:
         - name: management-tool
-          # Image gebouwd door Drone CI en gepushed naar de Gitea container registry.
-          # Registry: http://10.24.36.10:30080 (geconfigureerd als insecure mirror in k3s).
-          image: 10.24.36.10:30080/orange/orange-uptime-kuma-management-tool:latest
+          image: {{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 4000

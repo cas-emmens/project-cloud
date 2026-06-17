@@ -967,9 +967,9 @@
       register: argocd_dashboard_token
       changed_when: "'exists' not in argocd_dashboard_token.stdout"
 
-    - name: Copy management tool manifest to server
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../k8s/management-tool/deployment.yml"
+    - name: Template management tool manifest to server
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../k8s/management-tool/deployment.yml.j2"
         dest: /tmp/management-tool-deployment.yml
         mode: "0644"
 
