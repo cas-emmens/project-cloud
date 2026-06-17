@@ -1,0 +1,28 @@
+---
+# group_vars/all.yml — gedeelde platformvariabelen (identiek voor alle omgevingen)
+#
+# Omgevingsspecifieke variabelen (k3s_server_ip, domain_suffix, dns_servers,
+# semaphore_repo_branch) staan in inventories/<env>/group_vars/all.yml.
+#
+# Dit bestand wordt door provision-customer.yml geladen via vars_files,
+# omdat Semaphore geen inventory gebruikt.
+
+# ─── Ansible ──────────────────────────────────────────────────────────────────
+ansible_python_interpreter: auto_silent
+
+# ─── Service NodePort-toewijzingen ────────────────────────────────────────────
+gitea_http_port: 30080
+gitea_ssh_port: 30022
+drone_port: 80
+argocd_port: 30082
+grafana_port: 30083
+semaphore_port: 30084
+alertmanager_port: 30085
+headlamp_port: 30086
+management_tool_port: 30087
+prometheus_port: 30090
+
+# ─── Gitea ────────────────────────────────────────────────────────────────────
+gitea_admin_user: gitea_admin
+gitea_admin_password: "OrangeKuma2025!"
+gitea_org: orange
