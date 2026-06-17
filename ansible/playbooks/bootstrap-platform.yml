@@ -888,7 +888,7 @@
                 "name": "sales",
                 "project_id": {{ semaphore_project_id }},
                 "password": null,
-                "json": "{\"target_repo\":\"customer-instances\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\"}",
+                "json": "{\"target_repo\":\"customer-instances\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\",\"ansible_python_interpreter\":\"auto_silent\"}",
                 "env": "{}"
               }'
       register: semaphore_env_sales_create
@@ -907,7 +907,7 @@
                 "name": "ops",
                 "project_id": {{ semaphore_project_id }},
                 "password": null,
-                "json": "{\"target_repo\":\"test-customers\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\"}",
+                "json": "{\"target_repo\":\"test-customers\",\"k3s_server_ip\":\"{{ k3s_server_ip }}\",\"domain_suffix\":\"{{ domain_suffix }}\",\"ansible_python_interpreter\":\"auto_silent\"}",
                 "env": "{}"
               }'
       register: semaphore_env_ops_create
