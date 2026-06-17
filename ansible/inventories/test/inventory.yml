@@ -1,0 +1,26 @@
+---
+all:
+  vars:
+    # k3s config
+    k3s_version: "v1.31.4+k3s1"
+    k3s_cluster_cidr: "10.42.0.0/16"
+    k3s_service_cidr: "10.43.0.0/16"
+
+    ssh_public_key: "{{ lookup('env', 'SSH_PUBLIC_KEY') }}"
+
+  children:
+    k3s_cluster:
+      children:
+        k3s_server:
+          hosts:
+            k3s-server:
+              ansible_host: 10.24.35.2
+              ansible_user: root
+        k3s_agents:
+          hosts:
+            k3s-agent-1:
+              ansible_host: 10.24.35.3
+              ansible_user: root
+            k3s-agent-2:
+              ansible_host: 10.24.35.4
+              ansible_user: root

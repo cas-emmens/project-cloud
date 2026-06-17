@@ -1,0 +1,25 @@
+---
+# group_vars/all.yml — Test-omgeving
+# Gedeelde platformvariabelen voor alle playbooks.
+
+# ─── Infrastructuur ───────────────────────────────────────────────────────────
+k3s_server_ip: "10.24.35.2"
+domain_suffix: "10.24.35.2.nip.io"
+dns_servers: "8.8.8.8 1.1.1.1"
+
+# ─── Service NodePort-toewijzingen ────────────────────────────────────────────
+gitea_http_port: 30080
+gitea_ssh_port: 30022
+drone_port: 80
+argocd_port: 30082
+grafana_port: 30083
+semaphore_port: 30084
+alertmanager_port: 30085
+headlamp_port: 30086
+management_tool_port: 30087
+prometheus_port: 30090
+
+# ─── Gitea ────────────────────────────────────────────────────────────────────
+gitea_admin_user: gitea_admin
+gitea_admin_password: "OrangeKuma2025!"
+gitea_org: orange

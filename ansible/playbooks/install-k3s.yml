@@ -60,7 +60,7 @@
         dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
         content: |
           [Resolve]
-          DNS=10.24.36.1 1.1.1.1
+          DNS={{ dns_servers }}
           FallbackDNS=1.1.1.1 8.8.8.8
         mode: "0644"
       register: dns_config
