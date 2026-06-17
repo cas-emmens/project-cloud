@@ -3,9 +3,9 @@
 # Gedeelde platformvariabelen voor alle playbooks.
 
 # ─── Infrastructuur ───────────────────────────────────────────────────────────
-k3s_server_ip: "10.24.35.2"
-domain_suffix: "10.24.35.2.nip.io"
-dns_servers: "8.8.8.8 1.1.1.1"
+k3s_server_ip: "10.24.35.10"
+domain_suffix: "10.24.35.10.nip.io"
+dns_servers: "10.24.35.1 1.1.1.1"
 
 # ─── Service NodePort-toewijzingen ────────────────────────────────────────────
 gitea_http_port: 30080
