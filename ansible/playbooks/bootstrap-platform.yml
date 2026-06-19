@@ -221,10 +221,11 @@
       shell: |
         kubectl -n drone create secret generic drone-secrets \
           --from-literal=DRONE_GITEA_CLIENT_ID="{{ drone_client_id }}" \
-          --from-literal=DRONE_GITEA_CLIENT_SECRET="{{ drone_client_secret | default('existing') }}" \
+          --from-literal=DRONE_GITEA_CLIENT_SECRET="{{ drone_client_secret }}" \
           --from-literal=DRONE_RPC_SECRET="{{ drone_rpc_secret_raw.stdout }}" \
           --from-literal=DRONE_ADMIN_TOKEN="{{ drone_admin_token }}" \
           --dry-run=client -o yaml | kubectl apply -f -
+      when: "'EXISTING' not in drone_oauth.stdout"
       changed_when: false
 
     - name: Deploy Drone Server
