@@ -1,0 +1,4 @@
+---
+semaphore_namespace: semaphore
+semaphore_image: "semaphoreui/semaphore:v2.10.34"
+semaphore_persistence_size: "1Gi"
