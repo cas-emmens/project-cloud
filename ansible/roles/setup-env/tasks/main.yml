@@ -1,0 +1,28 @@
+---
+- name: Zorg dat {{ env_file }} bestaat
+  ansible.builtin.file:
+    path: "{{ env_file }}"
+    state: touch
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+  delegate_to: localhost
+
+- name: Stel K3S_SERVER_IP in in {{ env_file }}
+  ansible.builtin.lineinfile:
+    path: "{{ env_file }}"
+    regexp: '^export K3S_SERVER_IP='
+    line: "export K3S_SERVER_IP={{ k3s_server_ip }}"
+    create: true
+    mode: "0600"
+  delegate_to: localhost
+
+- name: Laad de omgevingsvariabelen
+  ansible.builtin.debug:
+    msg:
+      - "K3S_SERVER_IP={{ k3s_server_ip }} is ingesteld in {{ env_file }}"
+      - ""
+      - "Voer het volgende uit om de variabelen in je huidige shell te laden:"
+      - ""
+      - "    source {{ env_file }}"
+      - ""
