@@ -1,0 +1,30 @@
+---
+- name: Show cluster nodes
+  ansible.builtin.shell: kubectl get nodes -o wide
+  register: cluster_nodes
+  changed_when: false
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Display cluster status
+  ansible.builtin.debug:
+    msg: "{{ cluster_nodes.stdout_lines }}"
+
+- name: Verify all nodes are Ready
+  ansible.builtin.shell: |
+    TOTAL=$(kubectl get nodes --no-headers | wc -l)
+    READY=$(kubectl get nodes --no-headers | grep -c "Ready")
+    if [ "$TOTAL" -eq "$READY" ] && [ "$TOTAL" -eq 3 ]; then
+      echo "Alle 3 nodes zijn Ready"
+    else
+      echo "FOUT: verwacht 3 ready nodes, heeft $READY/$TOTAL"
+      exit 1
+    fi
+  register: verify_result
+  changed_when: false
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Show verification result
+  ansible.builtin.debug:
+    msg: "{{ verify_result.stdout }}"
