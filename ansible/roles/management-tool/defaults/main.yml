@@ -1,0 +1,4 @@
+---
+management_tool_container_port: 4000
+management_tool_repo: orange-uptime-kuma-management-tool
+management_tool_image: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool:latest"

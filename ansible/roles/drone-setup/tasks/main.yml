@@ -1,0 +1,274 @@
+---
+- name: Get Drone admin token from k8s secret (or create if missing)
+  ansible.builtin.shell: |
+    set -o pipefail
+    EXISTING=$(kubectl -n drone get secret drone-secrets \
+      -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' 2>/dev/null | base64 -d)
+    if [ -z "$EXISTING" ]; then
+      DRONE_ADMIN_TOKEN=$(openssl rand -hex 32)
+      kubectl -n drone create secret generic drone-secrets \
+        --from-literal=DRONE_RPC_SECRET="$DRONE_ADMIN_TOKEN" \
+        --from-literal=DRONE_ADMIN_TOKEN="$DRONE_ADMIN_TOKEN" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      echo "$DRONE_ADMIN_TOKEN"
+    else
+      echo "$EXISTING"
+    fi
+  args:
+    executable: /bin/bash
+  register: drone_token_raw
+  changed_when: false
+  failed_when: drone_token_raw.stdout == ''
+
+- name: Set drone_admin_token fact
+  ansible.builtin.set_fact:
+    drone_admin_token: "{{ drone_token_raw.stdout }}"
+
+- name: Inject Gitea OAuth token into Drone database to enable repo sync
+  ansible.builtin.shell: |
+    GITEA_TOKEN="{{ gitea_drone_pat.json.sha1 }}"
+    GITEA_USER="{{ gitea_admin_user }}"
+    DRONE_POD=$(kubectl -n drone get pods -l app=drone-server --no-headers \
+      | grep Running | awk '{print $1}' | head -1)
+    kubectl -n drone exec "$DRONE_POD" -- \
+      sh -c "command -v sqlite3 >/dev/null 2>&1 || apk add -q sqlite >/dev/null 2>&1"
+    kubectl -n drone exec "$DRONE_POD" -- \
+      sqlite3 /data/database.sqlite \
+      "UPDATE users SET user_oauth_token='${GITEA_TOKEN}' WHERE user_login='${GITEA_USER}'"
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Restart Drone server to clear in-memory user cache
+  ansible.builtin.shell: |
+    kubectl -n drone rollout restart deploy/drone-server
+    kubectl -n drone rollout status deploy/drone-server --timeout=120s
+  changed_when: true
+
+- name: Wait for Drone to be responsive again after restart
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/healthz"
+    status_code: 200
+  register: drone_health_post_restart
+  retries: 30
+  delay: 5
+  until: drone_health_post_restart.status == 200
+
+- name: Restart Drone runner to reconnect to fresh drone-server
+  ansible.builtin.shell: |
+    kubectl -n drone rollout restart deploy/drone-runner-docker
+    kubectl -n drone rollout status deploy/drone-runner-docker --timeout=120s
+  changed_when: true
+
+- name: Ensure sqlite3 is available in Drone pod (lost on restart)
+  ansible.builtin.shell: |
+    DRONE_POD=$(kubectl -n drone get pods -l app=drone-server --no-headers \
+      | grep Running | awk '{print $1}' | head -1)
+    kubectl -n drone exec "$DRONE_POD" -- \
+      sh -c 'command -v sqlite3 || apk add sqlite'
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Get Drone admin user_id from database
+  ansible.builtin.shell: |
+    DRONE_POD=$(kubectl -n drone get pods -l app=drone-server --no-headers \
+      | grep Running | awk '{print $1}' | head -1)
+    kubectl -n drone exec "$DRONE_POD" -- \
+      sqlite3 /data/database.sqlite \
+      "SELECT user_id FROM users WHERE user_login='{{ gitea_admin_user }}'"
+  register: drone_user_id_query
+  changed_when: false
+
+- name: Insert each repo directly into Drone's repos table
+  ansible.builtin.shell: |
+    DRONE_POD=$(kubectl -n drone get pods -l app=drone-server --no-headers \
+      | grep Running | awk '{print $1}' | head -1)
+    SIGNER=$(openssl rand -hex 16)
+    SECRET=$(openssl rand -hex 16)
+    NOW=$(date +%s)
+    kubectl -n drone exec "$DRONE_POD" -- sqlite3 /data/database.sqlite "
+    INSERT OR REPLACE INTO repos (
+      repo_uid, repo_user_id, repo_namespace, repo_name, repo_slug,
+      repo_scm, repo_clone_url, repo_ssh_url, repo_html_url,
+      repo_active, repo_private, repo_visibility, repo_branch,
+      repo_counter, repo_config, repo_timeout, repo_trusted, repo_protected,
+      repo_synced, repo_created, repo_updated, repo_version,
+      repo_signer, repo_secret,
+      repo_no_forks, repo_no_pulls, repo_cancel_pulls, repo_cancel_push,
+      repo_throttle, repo_cancel_running
+    ) VALUES (
+      '{{ item.json.id }}', {{ drone_user_id_query.stdout | int }},
+      '{{ gitea_org }}', '{{ item.json.name }}',
+      '{{ gitea_org }}/{{ item.json.name }}',
+      'git',
+      '{{ item.json.clone_url | replace("localhost", k3s_server_ip) }}',
+      '{{ item.json.ssh_url }}',
+      '{{ item.json.html_url | replace("localhost", k3s_server_ip) }}',
+      0, {{ 1 if item.json.private else 0 }},
+      '{{ "private" if item.json.private else "public" }}',
+      '{{ item.json.default_branch }}',
+      0, '.drone.yml', 60, 0, 0,
+      $NOW, $NOW, $NOW, 1,
+      '$SIGNER', '$SECRET',
+      0, 0, 0, 0, 0, 0
+    );
+    "
+  args:
+    executable: /bin/bash
+  loop: "{{ gitea_repo_details.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  changed_when: true
+
+- name: Activate repositories in Drone CI
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.name }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ drone_admin_token }}"
+    status_code: [200, 409]
+  loop: "{{ repos }}"
+  register: drone_activate
+  changed_when: false
+
+- name: Log Drone activation status
+  ansible.builtin.debug:
+    msg: >
+      Drone CI repo '{{ item.item.name }}':
+      {{ 'geactiveerd' if item.status == 200 else 'was al actief' }}.
+  loop: "{{ drone_activate.results }}"
+
+- name: Set Gitea registry credentials as Drone repo secrets
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.0.name }}/secrets"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ drone_admin_token }}"
+    body_format: json
+    body:
+      name: "{{ item.1.name }}"
+      data: "{{ item.1.value }}"
+      pull_request: false
+    status_code: [200, 201, 409]
+  loop: "{{ repos | product(drone_secret_pairs) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} / {{ item.1.name }}"
+  vars:
+    drone_secret_pairs:
+      - { name: "GITEA_REGISTRY",          value: "{{ k3s_server_ip }}:{{ gitea_http_port }}" }
+      - { name: "GITEA_REGISTRY_USERNAME", value: "{{ gitea_admin_user }}" }
+      - { name: "GITEA_REGISTRY_PASSWORD", value: "{{ gitea_admin_password }}" }
+      - { name: "KUMA_IMAGE_REPO",         value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma" }
+      - { name: "MGMT_IMAGE_REPO",         value: "{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/orange-uptime-kuma-management-tool" }
+  changed_when: false
+
+- name: Get existing Drone builds before pushing code
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds"
+    headers:
+      Authorization: "Bearer {{ drone_admin_token }}"
+    status_code: [200]
+  register: build_list_before_trigger
+  loop: "{{ gitea_repo_details.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  changed_when: false
+
+- name: Store previous build numbers
+  ansible.builtin.set_fact:
+    previous_build_numbers: >-
+      {{ previous_build_numbers | default({})
+         | combine({
+             item.item.json.name: (item.json[0].number if (item.json | length > 0) else 0)
+           }) }}
+  loop: "{{ build_list_before_trigger.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+
+- name: Clone from GitHub and push to Gitea
+  ansible.builtin.shell: |
+    set -euo pipefail
+    TMPDIR=$(mktemp -d)
+    trap "rm -rf $TMPDIR" EXIT
+    git clone --bare "{{ item.item.github_url }}" "$TMPDIR/repo.git"
+    git -C "$TMPDIR/repo.git" push --mirror \
+      "http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ item.item.name }}.git"
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  loop: "{{ repo_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: >
+    item.status == 404 or
+    (item.status == 200 and (item.json.mirror | default(false) | bool))
+  changed_when: true
+
+- name: Wait for build to appear in Drone for each repo
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds"
+    headers:
+      Authorization: "Bearer {{ drone_admin_token }}"
+    status_code: [200]
+  register: build_list_results
+  retries: 12
+  delay: 5
+  until: >
+    build_list_results.json | length > 0 and
+    (build_list_results.json[0].number | int) >
+    (previous_build_numbers[item.json.name] | default(0) | int)
+  loop: "{{ gitea_repo_details.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  changed_when: false
+
+- name: Store build numbers (most recent build per repo)
+  ansible.builtin.set_fact:
+    build_numbers: >-
+      {{ build_numbers | default({})
+         | combine({item.item.json.name: item.json[0].number}) }}
+  loop: "{{ build_list_results.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+
+- name: Log triggered builds
+  ansible.builtin.debug:
+    msg: "Build #{{ build_numbers[item.json.name] }} getriggerd voor '{{ item.json.name }}'."
+  loop: "{{ gitea_repo_details.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+
+- name: Wait for builds to complete (max 30 min per build)
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/api/repos/{{ gitea_org }}/{{ item.json.name }}/builds/{{ build_numbers[item.json.name] }}"
+    headers:
+      Authorization: "Bearer {{ drone_admin_token }}"
+    status_code: 200
+  register: build_status
+  until: build_status.json.status in ['success', 'failure', 'error', 'killed', 'skipped']
+  retries: 60
+  delay: 30
+  loop: "{{ gitea_repo_details.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  changed_when: false
+
+- name: Warn about builds that did not succeed
+  ansible.builtin.debug:
+    msg: >
+      WAARSCHUWING: Build #{{ build_numbers[item.item.json.name] }} voor
+      '{{ item.item.json.name }}' eindigde met status '{{ item.json.status }}'.
+      Logs: http://{{ k3s_server_ip }}:{{ drone_port }}/{{ gitea_org }}/{{ item.item.json.name }}
+  loop: "{{ build_status.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+  when: item.json.status != 'success'
+
+- name: Log successful builds
+  ansible.builtin.debug:
+    msg: "Build #{{ build_numbers[item.item.json.name] }} voor '{{ item.item.json.name }}' succesvol afgerond."
+  loop: "{{ build_status.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+  when: item.json.status == 'success'
