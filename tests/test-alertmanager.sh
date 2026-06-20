@@ -2,7 +2,7 @@
 # tests/test-alertmanager.sh
 # Test de Alertmanager → Mailpit keten via twee scenario's:
 #   1. Directe alert injectie via de Alertmanager API
-#   2. Keten test via een echte K8s alert (scale deployment naar 0)
+#   2. Keten test via een echte K8s alert (scale headlamp naar 0)
 #
 # Vereisten:
 #   - K3S_SERVER_IP moet beschikbaar zijn in de shell
@@ -38,6 +38,7 @@ fi
 ALERTMANAGER="http://${K3S_SERVER_IP}:30085"
 MAILPIT="http://${K3S_SERVER_IP}:30026"
 KUBECTL="ssh debian@${K3S_SERVER_IP} sudo kubectl"
+ALERT_ID="InjectieTest-$(date +%s)"
 
 echo ""
 echo "=== Alertmanager test suite ==="
@@ -71,30 +72,30 @@ print(sum(1 for m in msgs if '${label}' in m.get('Subject', '') or '${label}' in
     return 1
 }
 
-# ─── Acties afvuren ───────────────────────────────────────────────────────────
-echo "--- Acties afvuren ---"
-info "Test 1: alert injecteren via Alertmanager API..."
+# ─── Test 1: Directe injectie ─────────────────────────────────────────────────
+echo "--- Test 1: Directe injectie via Alertmanager API ---"
+info "Alert injecteren met id '${ALERT_ID}'..."
 curl -sf -X POST "${ALERTMANAGER}/api/v2/alerts" \
     -H 'Content-Type: application/json' \
-    -d '[{
-        "labels": {"alertname": "DirecteInjectieTest", "severity": "critical"},
-        "annotations": {"summary": "Directe injectie test via test-alertmanager.sh"}
-    }]' > /dev/null
+    -d "[{
+        \"labels\": {\"alertname\": \"${ALERT_ID}\", \"severity\": \"critical\"},
+        \"annotations\": {\"summary\": \"Directe injectie test via test-alertmanager.sh\"}
+    }]" > /dev/null
 
-info "Test 2: Mailpit deployment schalen naar 0..."
-$KUBECTL -n mailpit scale deployment mailpit --replicas=0
-
-echo ""
-
-# ─── Wachten op resultaten ────────────────────────────────────────────────────
-echo "--- Wachten op resultaten ---"
-if wait_for_mail "DirecteInjectieTest" 90; then
+if wait_for_mail "${ALERT_ID}" 90; then
     green "Test 1: mail ontvangen voor directe injectie"
     PASS=$((PASS + 1))
 else
     red "Test 1: geen mail ontvangen binnen 90s"
     FAIL=$((FAIL + 1))
 fi
+
+echo ""
+
+# ─── Test 2: Keten test via echte K8s alert ───────────────────────────────────
+echo "--- Test 2: Keten test via echte K8s alert ---"
+info "Headlamp deployment schalen naar 0..."
+$KUBECTL -n kube-system scale deployment headlamp --replicas=0
 
 if wait_for_mail "KubeDeployment" 180; then
     green "Test 2: K8s alert mail ontvangen"
@@ -104,13 +105,10 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-echo ""
-
-# ─── Herstel ──────────────────────────────────────────────────────────────────
-info "Mailpit deployment herstellen naar 1 replica..."
-$KUBECTL -n mailpit scale deployment mailpit --replicas=1
-$KUBECTL -n mailpit rollout status deployment mailpit --timeout=60s > /dev/null
-info "Mailpit is weer beschikbaar op ${MAILPIT}"
+info "Headlamp deployment herstellen naar 1 replica..."
+$KUBECTL -n kube-system scale deployment headlamp --replicas=1
+$KUBECTL -n kube-system rollout status deployment headlamp --timeout=60s > /dev/null
+info "Headlamp is hersteld"
 
 echo ""
 
