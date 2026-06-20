@@ -37,6 +37,7 @@ fi
 
 ALERTMANAGER="http://${K3S_SERVER_IP}:30085"
 MAILPIT="http://${K3S_SERVER_IP}:30026"
+KUBECTL="ssh debian@${K3S_SERVER_IP} sudo kubectl"
 
 echo ""
 echo "=== Alertmanager test suite ==="
@@ -100,7 +101,7 @@ echo "--- Test 2: Keten test via echte K8s alert ---"
 clear_mailpit
 
 info "Mailpit deployment schalen naar 0..."
-kubectl -n mailpit scale deployment mailpit --replicas=0
+$KUBECTL -n mailpit scale deployment mailpit --replicas=0
 info "Wachten op KubeDeploymentReplicasMismatch alert (max 180s)..."
 
 if wait_for_mail "KubeDeployment" 180; then
@@ -112,8 +113,8 @@ else
 fi
 
 info "Mailpit deployment herstellen naar 1 replica..."
-kubectl -n mailpit scale deployment mailpit --replicas=1
-kubectl -n mailpit rollout status deployment mailpit --timeout=60s > /dev/null
+$KUBECTL -n mailpit scale deployment mailpit --replicas=1
+$KUBECTL -n mailpit rollout status deployment mailpit --timeout=60s > /dev/null
 info "Mailpit is weer beschikbaar op ${MAILPIT}"
 
 echo ""
