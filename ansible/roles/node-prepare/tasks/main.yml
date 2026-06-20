@@ -1,0 +1,66 @@
+---
+- name: Verify DNS resolution
+  ansible.builtin.command: getent hosts deb.debian.org
+  changed_when: false
+  retries: 12
+  delay: 10
+  register: dns_check
+  until: dns_check.rc == 0
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: true
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name:
+      - curl
+      - open-iscsi
+      - qemu-guest-agent
+    state: present
+
+- name: Enable and start qemu-guest-agent
+  ansible.builtin.systemd:
+    name: qemu-guest-agent
+    enabled: true
+    state: started
+
+- name: Enable and start iscsid (Longhorn dependency)
+  ansible.builtin.systemd:
+    name: iscsid
+    enabled: true
+    state: started
+
+- name: Load kernel modules for k3s
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+    - ip_tables
+
+- name: Persist kernel modules
+  ansible.builtin.copy:
+    content: |
+      br_netfilter
+      overlay
+      ip_tables
+    dest: /etc/modules-load.d/k3s.conf
+    mode: "0644"
+
+- name: Set sysctl params for k3s
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/k3s.conf
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward",                 value: "1" }

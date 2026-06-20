@@ -1,0 +1,51 @@
+---
+- name: Get token from server
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ hostvars['k3s-server']['k3s_node_token'] }}"
+
+- name: Wait for k3s install script to be reachable
+  ansible.builtin.shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
+  register: internet_check
+  retries: 60
+  delay: 10
+  until: internet_check.rc == 0
+  changed_when: false
+
+- name: Check if k3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Install k3s agent
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -sfL --ipv4 https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{ k3s_version }}" \
+      K3S_URL="https://{{ k3s_server_ip }}:6443" \
+      K3S_TOKEN="{{ k3s_node_token }}" \
+      sh -s - agent \
+      --node-name={{ inventory_hostname }}
+  args:
+    executable: /bin/bash
+  when: not k3s_binary.stat.exists
+  register: k3s_agent_install
+  failed_when:
+    - k3s_agent_install.rc != 0
+    - "'D-Bus connection terminated' not in (k3s_agent_install.stderr | default(''))"
+
+- name: Remove stale known_hosts entry for k3s server
+  ansible.builtin.shell: "ssh-keygen -R {{ k3s_server_ip }} 2>/dev/null || true"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Wait for agent to join the cluster
+  ansible.builtin.shell: |
+    ssh -o StrictHostKeyChecking=accept-new debian@{{ k3s_server_ip }} \
+      "kubectl get nodes {{ inventory_hostname }} 2>/dev/null | grep -q Ready"
+  retries: 30
+  delay: 5
+  register: agent_joined
+  until: agent_joined.rc == 0
+  delegate_to: localhost
+  become: false
