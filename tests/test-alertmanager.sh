@@ -6,7 +6,7 @@
 #
 # Vereisten:
 #   - K3S_SERVER_IP moet beschikbaar zijn in de shell
-#   - kubectl geconfigureerd op de control node
+#   - SSH toegang tot debian@K3S_SERVER_IP
 #
 # Gebruik:
 #   source ~/.env
@@ -47,10 +47,6 @@ echo "    Mailpit      : ${MAILPIT}"
 echo ""
 
 # ─── Hulpfuncties ─────────────────────────────────────────────────────────────
-clear_mailpit() {
-    curl -sf -X DELETE "${MAILPIT}/api/v1/messages" > /dev/null 2>&1 || true
-}
-
 wait_for_mail() {
     local label="$1"
     local timeout="${2:-120}"
@@ -75,10 +71,9 @@ print(sum(1 for m in msgs if '${label}' in m.get('Subject', '') or '${label}' in
     return 1
 }
 
-# ─── Test 1: Directe injectie ─────────────────────────────────────────────────
-echo "--- Test 1: Directe injectie via Alertmanager API ---"
-clear_mailpit
-
+# ─── Acties afvuren ───────────────────────────────────────────────────────────
+echo "--- Acties afvuren ---"
+info "Test 1: alert injecteren via Alertmanager API..."
 curl -sf -X POST "${ALERTMANAGER}/api/v2/alerts" \
     -H 'Content-Type: application/json' \
     -d '[{
@@ -86,32 +81,32 @@ curl -sf -X POST "${ALERTMANAGER}/api/v2/alerts" \
         "annotations": {"summary": "Directe injectie test via test-alertmanager.sh"}
     }]' > /dev/null
 
-if wait_for_mail "DirecteInjectieTest" 90; then
-    green "Test 1: mail ontvangen in Mailpit"
-    PASS=$((PASS + 1))
-else
-    red "Test 1: geen mail ontvangen binnen 60s"
-    FAIL=$((FAIL + 1))
-fi
+info "Test 2: Mailpit deployment schalen naar 0..."
+$KUBECTL -n mailpit scale deployment mailpit --replicas=0
 
 echo ""
 
-# ─── Test 2: Keten test via echte K8s alert ───────────────────────────────────
-echo "--- Test 2: Keten test via echte K8s alert ---"
-clear_mailpit
-
-info "Mailpit deployment schalen naar 0..."
-$KUBECTL -n mailpit scale deployment mailpit --replicas=0
-info "Wachten op KubeDeploymentReplicasMismatch alert (max 180s)..."
+# ─── Wachten op resultaten ────────────────────────────────────────────────────
+echo "--- Wachten op resultaten ---"
+if wait_for_mail "DirecteInjectieTest" 90; then
+    green "Test 1: mail ontvangen voor directe injectie"
+    PASS=$((PASS + 1))
+else
+    red "Test 1: geen mail ontvangen binnen 90s"
+    FAIL=$((FAIL + 1))
+fi
 
 if wait_for_mail "KubeDeployment" 180; then
-    green "Test 2: K8s alert mail ontvangen in Mailpit"
+    green "Test 2: K8s alert mail ontvangen"
     PASS=$((PASS + 1))
 else
     red "Test 2: geen alert mail ontvangen binnen 180s"
     FAIL=$((FAIL + 1))
 fi
 
+echo ""
+
+# ─── Herstel ──────────────────────────────────────────────────────────────────
 info "Mailpit deployment herstellen naar 1 replica..."
 $KUBECTL -n mailpit scale deployment mailpit --replicas=1
 $KUBECTL -n mailpit rollout status deployment mailpit --timeout=60s > /dev/null
