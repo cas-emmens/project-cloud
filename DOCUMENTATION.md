@@ -169,14 +169,14 @@ Requires `open-iscsi` installed and `iscsid` running on every node (handled by `
 
 ### Gitea (namespace: `gitea`)
 
-Repository manager. Installed via the official Gitea Helm chart. PostgreSQL is deployed as a sub-chart for the database. An admin account (`gitea_admin`) is created automatically. Webhooks are configured to allow all hosts (needed for Drone CI integration).
+Repository manager. Installed via the official Gitea Helm chart. SQLite is used as the database (the Bitnami PostgreSQL and Redis subchart images are no longer available on Docker Hub; SQLite is fully functional at this scale). An admin account (`gitea_admin`) is created automatically. Webhooks are configured to allow all hosts (needed for Drone CI integration).
 
 ### Drone CI (namespace: `drone`)
 
 Continuous integration. Deployed as raw Kubernetes manifests (not Helm, because the Drone Helm chart is unmaintained). Two components:
 
 - **Drone Server** — the web UI and API. Connected to Gitea via OAuth2 (the OAuth app is created automatically via the Gitea API during deployment).
-- **Drone Runner (Kube)** — executes pipelines as Kubernetes pods in the `drone` namespace. Has `cluster-admin` permissions to create pipeline pods.
+- **Drone Runner (Docker)** — executes pipelines using Docker-in-Docker (DinD) as a sidecar container. Builds run inside the runner pod itself rather than spawning new k8s pods.
 
 Drone secrets (Gitea OAuth client ID/secret, RPC secret) are stored in a Kubernetes Secret.
 
@@ -223,7 +223,7 @@ The Alertmanager config is stored in the `alertmanager-prometheus-kube-prometheu
 
 Ansible UI for provisioning. This is the rubric-named tool through which the "verkoper" (and ops staff) create new customer instances — no CLI required. Deployed as a raw Kubernetes manifest with BoltDB (file-based database, no external DB needed). 1 GB persistent storage.
 
-Phase 4 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioning`, a repository pointing at the project-cloud Gitea repo, a `localhost` inventory, and **two templates** that share the single `provision-customer.yml` playbook:
+Phase 3 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioning`, a repository pointing at the project-cloud Gitea repo, a `localhost` inventory, and **two templates** that share the single `provision-customer.yml` playbook:
 
 - **"Nieuwe klant aanmaken"** (sales) — commits the rendered manifest to the `customer-instances` repo.
 - **"Testklant aanmaken"** (ops) — commits to the `test-customers` repo.
@@ -513,10 +513,31 @@ project-cloud/
 │   │   ├── provision-customer.yml         # Shared backend for both Semaphore templates
 │   │   ├── provision-customer-management.yml  # Legacy (pre-GitOps), unused
 │   │   └── remove-customer.yml            # Remove a customer instance
-│   ├── roles/
-│   │   └── setup-env/                     # Role voor setup-env.yml
-│   │       ├── defaults/main.yml          # env_file: /root/.env
-│   │       └── tasks/main.yml             # lineinfile K3S_SERVER_IP + debug instructie
+│   ├── roles/                             # Alle Ansible-rollen (één verantwoordelijkheid per rol)
+│   │   ├── setup-env/                     # Schrijf K3S_SERVER_IP naar /root/.env
+│   │   ├── vm-create/                     # Maak Proxmox VM aan (cloud-init)
+│   │   ├── node-prepare/                  # DNS, apt, open-iscsi, kernelmodules, sysctl
+│   │   ├── k3s-server/                    # Installeer k3s server, sla token + kubeconfig op
+│   │   ├── k3s-agent/                     # Voeg node toe aan cluster als agent
+│   │   ├── k3s-verify/                    # Verifieer dat alle nodes Ready zijn
+│   │   ├── helm/                          # Installeer Helm 3
+│   │   ├── longhorn/                      # Installeer Longhorn distributed storage
+│   │   ├── namespaces/                    # Maak alle platform-namespaces aan
+│   │   ├── gitea/                         # Installeer Gitea (Git + container registry)
+│   │   ├── drone/                         # Deploy Drone CI server + Docker runner
+│   │   ├── argocd/                        # Installeer Argo CD GitOps-controller
+│   │   ├── argocd-image-updater/          # Installeer Argo CD Image Updater
+│   │   ├── kube-prometheus-stack/         # Installeer Prometheus + Grafana + Alertmanager
+│   │   ├── mailpit/                       # Deploy Mailpit SMTP-catcher
+│   │   ├── alertmanager-config/           # Configureer Alertmanager → Mailpit routing
+│   │   ├── semaphore/                     # Deploy Semaphore + volledige API-bootstrap
+│   │   ├── headlamp/                      # Installeer Headlamp Kubernetes GUI
+│   │   ├── ingress-nginx/                 # Installeer ingress-nginx controller (HTTPS)
+│   │   ├── containerd-registry/           # Configureer insecure Gitea registry op alle nodes
+│   │   ├── gitea-repos/                   # Maak org, repos, GitOps-repos en tokens aan
+│   │   ├── drone-setup/                   # Koppel Drone aan Gitea, trigger builds
+│   │   ├── argocd-gitops/                 # Configureer Argo CD AppProject + Applications
+│   │   └── management-tool/               # Deploy Management Tool, mint ArgoCD token
 │   └── templates/
 │       └── customer-instance.yml.j2       # Rendered per-customer GitOps manifest
 ├── tests/

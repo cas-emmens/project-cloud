@@ -1,5 +1,52 @@
 # Changelog
 
+## refactor/roles
+
+Doel: alle Ansible-playbooks opsplitsen in rollen zodat elke stap een eigen verantwoordelijkheid heeft, testbaar is en makkelijk terug te vinden is.
+
+---
+
+### Wijzigingen
+
+**Alle playbooks omgezet naar rollen**
+
+Vier playbooks zijn volledig gerefactord. Elke playbook is nu een clean orchestrator die alleen rollen aanroept — geen inline taken meer.
+
+| Playbook | Rollen |
+|----------|--------|
+| `create-vms.yml` | `vm-create` |
+| `install-k3s.yml` | `node-prepare`, `k3s-server`, `k3s-agent`, `k3s-verify` |
+| `bootstrap-platform.yml` | `helm`, `longhorn`, `namespaces`, `gitea`, `drone`, `argocd`, `argocd-image-updater`, `kube-prometheus-stack`, `mailpit`, `alertmanager-config`, `semaphore`, `headlamp`, `ingress-nginx` |
+| `setup-cicd-pipeline.yml` | `containerd-registry`, `gitea-repos`, `drone-setup`, `argocd-gitops`, `management-tool` |
+
+**Chart- en image-versies verplaatst naar role defaults**
+
+Alle Helm-chartversies en container-imagetags die voorheen als `vars:` in de playbooks stonden zijn verplaatst naar `defaults/main.yml` van de betreffende rol. Voorbeeld: `gitea_chart_version` staat nu in `roles/gitea/defaults/main.yml`. Versies zijn zo per rol te beheren zonder het playbook aan te raken.
+
+**Repo-variabelen verplaatst naar role defaults**
+
+De `repos`-lijst (GitHub-URLs voor de twee source-repos) staat nu in `roles/gitea-repos/defaults/main.yml`. De management-tool variabelen (`management_tool_container_port`, `management_tool_repo`, `management_tool_image`) staan in `roles/management-tool/defaults/main.yml`.
+
+**README per rol**
+
+Elke rol heeft een `README.md` met:
+- Wat de rol doet (stap voor stap)
+- Alle variabelen met defaults en omschrijving
+- Afhankelijkheden (wat moet er al draaien)
+- Niet-voor-de-hand-liggende ontwerpkeuzes en bekende valkuilen
+
+**Alle modules omgezet naar FQCN**
+
+Alle Ansible-modulenamen gebruiken nu de volledige naam (`ansible.builtin.shell`, `ansible.builtin.copy`, etc.) conform de huidige Ansible-standaard.
+
+---
+
+### Geen functionele wijzigingen
+
+De refactor wijzigt de interne structuur, niet het gedrag van het platform. `deploy.sh` is ongewijzigd. Alle vier playbooks leveren exact dezelfde eindtoestand op als vóór de refactor.
+
+---
+
 ## feat/mailpit-alertmanager
 
 Doel: Alertmanager volledig configureren met email routing via Mailpit, NodePort conflicten oplossen en testinfrastructuur toevoegen.
