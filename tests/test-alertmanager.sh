@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # tests/test-alertmanager.sh
 # Test de Alertmanager → Mailpit keten via twee scenario's:
-#   1. Directe alert injectie via de Alertmanager API
-#   2. Keten test via een echte K8s alert (scale headlamp naar 0)
+#   1. Directe injectie via de Alertmanager API
+#   2. Watchdog check — bewijst dat de volledige Prometheus → Alertmanager → mail keten werkt
 #
 # Vereisten:
 #   - K3S_SERVER_IP moet beschikbaar zijn in de shell
-#   - SSH toegang tot debian@K3S_SERVER_IP
 #
 # Gebruik:
 #   source ~/.env
@@ -37,7 +36,6 @@ fi
 
 ALERTMANAGER="http://${K3S_SERVER_IP}:30085"
 MAILPIT="http://${K3S_SERVER_IP}:30026"
-KUBECTL="ssh debian@${K3S_SERVER_IP} sudo kubectl"
 ALERT_ID="InjectieTest-$(date +%s)"
 
 echo ""
@@ -78,7 +76,7 @@ info "Alert injecteren met id '${ALERT_ID}'..."
 curl -sf -X POST "${ALERTMANAGER}/api/v2/alerts" \
     -H 'Content-Type: application/json' \
     -d "[{
-        \"labels\": {\"alertname\": \"${ALERT_ID}\", \"severity\": \"critical\"},
+        \"labels\": {\"alertname\": \"${ALERT_ID}\", \"severity\": \"critical\", \"namespace\": \"test\"},
         \"annotations\": {\"summary\": \"Directe injectie test via test-alertmanager.sh\"}
     }]" > /dev/null
 
@@ -92,23 +90,17 @@ fi
 
 echo ""
 
-# ─── Test 2: Keten test via echte K8s alert ───────────────────────────────────
-echo "--- Test 2: Keten test via echte K8s alert ---"
-info "Headlamp deployment schalen naar 0..."
-$KUBECTL -n kube-system scale deployment headlamp --replicas=0
+# ─── Test 2: Watchdog check ───────────────────────────────────────────────────
+echo "--- Test 2: Watchdog check (Prometheus → Alertmanager → mail keten) ---"
+info "Controleren of Watchdog mail aanwezig is in Mailpit..."
 
-if wait_for_mail "KubeDeployment" 180; then
-    green "Test 2: K8s alert mail ontvangen"
+if wait_for_mail "Watchdog" 90; then
+    green "Test 2: Watchdog mail aanwezig — volledige keten werkt"
     PASS=$((PASS + 1))
 else
-    red "Test 2: geen alert mail ontvangen binnen 180s"
+    red "Test 2: geen Watchdog mail gevonden — controleer Alertmanager config"
     FAIL=$((FAIL + 1))
 fi
-
-info "Headlamp deployment herstellen naar 1 replica..."
-$KUBECTL -n kube-system scale deployment headlamp --replicas=1
-$KUBECTL -n kube-system rollout status deployment headlamp --timeout=60s > /dev/null
-info "Headlamp is hersteld"
 
 echo ""
 

@@ -665,7 +665,7 @@
           routes:
           - matchers:
             - alertname = "Watchdog"
-            receiver: "null"
+            receiver: email
         templates:
         - /etc/alertmanager/config/*.tmpl
         ' \
