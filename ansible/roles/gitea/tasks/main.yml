@@ -1,0 +1,42 @@
+---
+# Bitnami subcharts (postgresql-ha, redis-cluster) zijn uitgeschakeld:
+# hun gepinde images bestaan niet meer op Docker Hub. Gitea op SQLite
+# is volledig functioneel voor deze schaalgrootte.
+- name: Add Gitea Helm repo
+  ansible.builtin.shell: |
+    helm repo add gitea-charts https://dl.gitea.com/charts/
+    helm repo update
+  changed_when: false
+
+- name: Install Gitea
+  ansible.builtin.shell: |
+    helm upgrade --install gitea gitea-charts/gitea \
+      --namespace {{ gitea_namespace }} \
+      --version {{ gitea_chart_version }} \
+      --set service.http.type=NodePort \
+      --set service.http.nodePort={{ gitea_http_port }} \
+      --set service.ssh.type=NodePort \
+      --set service.ssh.nodePort={{ gitea_ssh_port }} \
+      --set gitea.admin.username={{ gitea_admin_user }} \
+      --set gitea.admin.password={{ gitea_admin_password }} \
+      --set gitea.admin.email=admin@orangekuma.local \
+      --set gitea.config.server.ROOT_URL=http://{{ k3s_server_ip }}:{{ gitea_http_port }} \
+      --set gitea.config.server.SSH_PORT={{ gitea_ssh_port }} \
+      --set gitea.config.server.SSH_LISTEN_PORT=22 \
+      --set gitea.config.webhook.ALLOWED_HOST_LIST=* \
+      --set gitea.config.database.DB_TYPE=sqlite3 \
+      --set persistence.enabled=true \
+      --set persistence.size={{ gitea_persistence_size }} \
+      --set persistence.storageClass=longhorn \
+      --set postgresql-ha.enabled=false \
+      --set postgresql.enabled=false \
+      --set redis-cluster.enabled=false \
+      --set redis.enabled=false \
+      --wait --timeout {{ gitea_install_timeout }}
+  register: gitea_install
+  changed_when: "'has been upgraded' in gitea_install.stdout or 'has been installed' in gitea_install.stdout"
+
+- name: Wait for Gitea rollout
+  ansible.builtin.shell: |
+    kubectl -n {{ gitea_namespace }} rollout status deploy/gitea --timeout=180s
+  changed_when: false
