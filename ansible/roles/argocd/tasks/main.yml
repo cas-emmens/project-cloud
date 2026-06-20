@@ -1,0 +1,43 @@
+---
+- name: Add Argo CD Helm repo
+  ansible.builtin.shell: |
+    helm repo add argo https://argoproj.github.io/argo-helm
+    helm repo update
+  changed_when: false
+
+# timeout.reconciliation op 30s zodat een Semaphore-commit binnen ~30s
+# wordt opgepakt — de Gitea webhook werkt niet in-cluster (ROOT_URL mismatch).
+- name: Install Argo CD
+  ansible.builtin.shell: |
+    helm upgrade --install argocd argo/argo-cd \
+      --namespace {{ argocd_namespace }} \
+      --version {{ argocd_chart_version }} \
+      --set server.service.type=NodePort \
+      --set server.service.nodePortHttp={{ argocd_port }} \
+      --set server.service.nodePortHttps={{ argocd_https_port }} \
+      --set server.extraArgs[0]=--insecure \
+      --set configs.params."server\.insecure"=true \
+      --set configs.cm."timeout\.reconciliation"={{ argocd_reconciliation_interval }} \
+      --wait --timeout {{ argocd_install_timeout }}
+  register: argocd_install
+  changed_when: "'has been upgraded' in argocd_install.stdout or 'has been installed' in argocd_install.stdout"
+
+- name: Wait for Argo CD server to be ready
+  ansible.builtin.shell: |
+    kubectl -n {{ argocd_namespace }} rollout status deploy/argocd-server --timeout=180s
+  changed_when: false
+
+# application-controller leest timeout.reconciliation alleen bij opstart.
+- name: Restart Argo CD application-controller to apply reconciliation interval
+  ansible.builtin.shell: |
+    kubectl -n {{ argocd_namespace }} rollout restart statefulset/argocd-application-controller
+    kubectl -n {{ argocd_namespace }} rollout status statefulset/argocd-application-controller --timeout=180s
+  when: argocd_install.changed
+  changed_when: true
+
+- name: Get Argo CD initial admin password
+  ansible.builtin.shell: |
+    kubectl -n {{ argocd_namespace }} get secret argocd-initial-admin-secret \
+      -o jsonpath="{.data.password}" | base64 -d
+  register: argocd_password
+  changed_when: false

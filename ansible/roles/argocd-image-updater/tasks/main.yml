@@ -1,0 +1,16 @@
+---
+# Gitea registry credentials worden aangemaakt in Phase 4 (setup-cicd-pipeline.yml)
+# omdat de argocd-gitops PAT daar wordt gemint. Tot die tijd retries de updater
+# zonder te slagen — self-healing zodra Phase 4 draait.
+- name: Install Argo CD Image Updater
+  ansible.builtin.shell: |
+    helm upgrade --install argocd-image-updater argo/argocd-image-updater \
+      --namespace argocd \
+      --version {{ argocd_image_updater_chart_version }} \
+      --set config.applicationsAPIKind=kubernetes \
+      --set config.argocd.plaintext=true \
+      --set config.argocd.insecure=true \
+      --set config.argocd.serverAddress=argocd-server.argocd.svc:80 \
+      --wait --timeout {{ argocd_image_updater_install_timeout }}
+  register: argocd_image_updater_install
+  changed_when: "'has been upgraded' in argocd_image_updater_install.stdout or 'has been installed' in argocd_image_updater_install.stdout"

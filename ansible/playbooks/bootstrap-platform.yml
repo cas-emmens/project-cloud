@@ -26,8 +26,6 @@
   # on a staging cluster, then update the value here in a separate
   # commit so the diff is reviewable.
   vars:
-    argocd_chart_version: "7.6.12"
-    argocd_image_updater_chart_version: "0.11.0"
     prometheus_stack_chart_version: "65.1.1"
     headlamp_chart_version: "0.27.0"
     ingress_nginx_chart_version: "4.11.3"
@@ -39,90 +37,10 @@
     - namespaces
     - gitea
     - drone
+    - argocd
+    - argocd-image-updater
 
   tasks:
-    # =========================================
-    # ARGO CD
-    # =========================================
-    - name: Add Argo CD Helm repo
-      shell: |
-        helm repo add argo https://argoproj.github.io/argo-helm
-        helm repo update
-      changed_when: false
-
-    # timeout.reconciliation controls how often the application-controller
-    # re-reads Git when there is no webhook. The chart default is 180s, so a
-    # freshly provisioned customer could take up to 3 minutes to appear even
-    # though the Applications have automated sync. We drop it to 30s so a
-    # Semaphore commit is picked up and deployed within ~30s without anyone
-    # clicking Refresh in the UI. (A Gitea push webhook is not used because
-    # Gitea's payload reports its public ROOT_URL host, which does not
-    # normalize-match the in-cluster service repoURL the Applications clone
-    # from, so the webhook would refresh nothing.)
-    - name: Install Argo CD
-      shell: |
-        helm upgrade --install argocd argo/argo-cd \
-          --namespace argocd \
-          --version {{ argocd_chart_version }} \
-          --set server.service.type=NodePort \
-          --set server.service.nodePortHttp={{ argocd_port }} \
-          --set server.service.nodePortHttps={{ argocd_https_port }} \
-          --set server.extraArgs[0]=--insecure \
-          --set configs.params."server\.insecure"=true \
-          --set configs.cm."timeout\.reconciliation"=30s \
-          --wait --timeout 10m
-      register: argocd_install
-      changed_when: "'has been upgraded' in argocd_install.stdout or 'has been installed' in argocd_install.stdout"
-
-    - name: Wait for Argo CD server to be ready
-      shell: |
-        kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
-      changed_when: false
-
-    # The application-controller reads timeout.reconciliation at startup, not
-    # at runtime, so on an upgrade where the value changed it must be
-    # restarted to apply the new interval. Harmless on a fresh install.
-    - name: Restart Argo CD application-controller to apply reconciliation interval
-      shell: |
-        kubectl -n argocd rollout restart statefulset/argocd-application-controller
-        kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
-      when: argocd_install.changed
-      changed_when: true
-
-    - name: Get Argo CD initial admin password
-      shell: |
-        kubectl -n argocd get secret argocd-initial-admin-secret \
-          -o jsonpath="{.data.password}" | base64 -d
-      register: argocd_password
-      changed_when: false
-
-    # ----------------------------------------------------------------
-    # Argo CD Image Updater (auto-update strategy, tier A + B)
-    # ----------------------------------------------------------------
-    # Watches the Gitea container registry for new tags of images
-    # referenced by Applications carrying the
-    # argocd-image-updater.argoproj.io/image-list annotation.
-    # When a new tag appears the updater rewrites the manifest in the
-    # corresponding Gitea repo (write-back-method: git), Argo CD then
-    # reconciles the customer Deployments to the new image.
-    #
-    # The Gitea registry credentials Secret is created in Phase 4
-    # (setup-cicd-pipeline.yml) because it reuses the argocd-gitops
-    # PAT minted there. Until that runs the updater pod will retry
-    # without succeeding - harmless and self-heals.
-    - name: Install Argo CD Image Updater
-      shell: |
-        helm upgrade --install argocd-image-updater argo/argocd-image-updater \
-          --namespace argocd \
-          --version {{ argocd_image_updater_chart_version }} \
-          --set config.applicationsAPIKind=kubernetes \
-          --set config.argocd.plaintext=true \
-          --set config.argocd.insecure=true \
-          --set config.argocd.serverAddress=argocd-server.argocd.svc:80 \
-          --wait --timeout 8m
-      register: argocd_image_updater_install
-      changed_when: "'has been upgraded' in argocd_image_updater_install.stdout or 'has been installed' in argocd_image_updater_install.stdout"
-
     # =========================================
     # PROMETHEUS + GRAFANA (Monitoring)
     # =========================================
