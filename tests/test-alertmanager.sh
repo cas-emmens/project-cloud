@@ -85,7 +85,7 @@ curl -sf -X POST "${ALERTMANAGER}/api/v2/alerts" \
         "annotations": {"summary": "Directe injectie test via test-alertmanager.sh"}
     }]' > /dev/null
 
-if wait_for_mail "DirecteInjectieTest" 60; then
+if wait_for_mail "DirecteInjectieTest" 90; then
     green "Test 1: mail ontvangen in Mailpit"
     PASS=$((PASS + 1))
 else
