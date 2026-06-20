@@ -1,105 +1,17 @@
 ---
 # playbooks/create-vms.yml
-# Creates k3s VMs on each Proxmox node using the Debian 12 cloud-init image
+# Phase 1: Maak k3s VMs aan op Proxmox nodes
 #
-# Usage:
-#   ansible-playbook playbooks/create-vms.yml
+# Gebruik:
+#   ansible-playbook playbooks/create-vms.yml -i inventories/test
 #
-# Prerequisites:
-#   - debian-12-generic-amd64.qcow2 on each Proxmox node at /var/lib/vz/template/iso/
-#   - SSH public key set via SSH_PUBLIC_KEY env var
-#   - Proxmox password set via PROXMOX_PASSWORD env var
+# Vereisten:
+#   - debian-12-generic-amd64.qcow2 op elke Proxmox node (wordt gedownload indien afwezig)
+#   - SSH_PUBLIC_KEY omgevingsvariabele
+#   - PROXMOX_PASSWORD omgevingsvariabele
 
-- name: Create k3s VMs on Proxmox nodes
+- name: Maak k3s VMs aan op Proxmox nodes
   hosts: proxmox_nodes
   gather_facts: false
-  tasks:
-    - name: Check if base image exists
-      stat:
-        path: "{{ base_image }}"
-      register: base_image_stat
-
-    - name: Download Debian 12 cloud image
-      get_url:
-        url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
-        dest: "{{ base_image }}"
-        mode: "0644"
-      when: not base_image_stat.stat.exists
-
-    - name: Check if VM already exists
-      shell: "qm status {{ vm_id }} 2>/dev/null"
-      register: vm_exists
-      failed_when: false
-      changed_when: false
-
-    - name: Skip if VM already running
-      debug:
-        msg: "VM {{ vm_id }} ({{ vm_name }}) already exists, skipping creation"
-      when: vm_exists.rc == 0
-
-    - name: Create VM from cloud-init image
-      when: vm_exists.rc != 0
-      block:
-        - name: Create the VM
-          shell: |
-            qm create {{ vm_id }} \
-              --name {{ vm_name }} \
-              --memory 16384 \
-              --cores 2 \
-              --cpu cputype=host \
-              --net0 virtio,bridge={{ bridge }} \
-              --ostype l26 \
-              --scsihw virtio-scsi-single \
-              --agent enabled=1
-
-        - name: Import the disk from qcow2
-          shell: |
-            qm importdisk {{ vm_id }} {{ base_image }} local-lvm --format raw
-          register: import_result
-
-        - name: Attach the imported disk as scsi0
-          shell: |
-            qm set {{ vm_id }} \
-              --scsi0 local-lvm:vm-{{ vm_id }}-disk-0,iothread=1,discard=on
-
-        - name: Resize disk to 100GB
-          shell: |
-            qm resize {{ vm_id }} scsi0 100G
-
-        - name: Add cloud-init drive
-          shell: |
-            qm set {{ vm_id }} --ide2 local-lvm:cloudinit
-
-        - name: Configure cloud-init settings
-          shell: |
-            qm set {{ vm_id }} \
-              --ipconfig0 ip={{ vm_ip }}/{{ netmask }},gw={{ gateway }} \
-              --nameserver {{ nameserver }} \
-              --sshkeys <(echo "{{ ssh_public_key }}") \
-              --ciuser debian \
-              --boot order=scsi0 \
-              --serial0 socket \
-              --vga serial0
-          args:
-            executable: /bin/bash
-
-        - name: Start the VM
-          shell: "qm start {{ vm_id }}"
-
-        - name: Wait for VM to be reachable via SSH
-          wait_for:
-            host: "{{ vm_ip }}"
-            port: 22
-            delay: 10
-            timeout: 180
-            state: started
-          delegate_to: localhost
-
-    - name: Verify VM is running
-      shell: "qm status {{ vm_id }}"
-      register: vm_status
-      changed_when: false
-
-    - name: Show VM status
-      debug:
-        msg: "{{ vm_name }} ({{ vm_id }}): {{ vm_status.stdout }}"
+  roles:
+    - vm-create
