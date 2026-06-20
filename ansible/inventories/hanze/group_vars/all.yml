@@ -19,6 +19,14 @@ alertmanager_port: 30085
 headlamp_port: 30086
 management_tool_port: 30087
 prometheus_port: 30090
+mailpit_smtp_port: 30025
+mailpit_web_port: 30026
+argocd_https_port: 30443
+prometheus_reloader_port: 30091
+alertmanager_reloader_port: 30092
+
+# ─── Alertmanager ─────────────────────────────────────────────────────────────
+alert_receiver_email: "admin@orangekuma.local"
 
 # ─── Gitea ────────────────────────────────────────────────────────────────────
 gitea_admin_user: gitea_admin

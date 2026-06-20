@@ -204,11 +204,20 @@ Full monitoring stack installed via the `kube-prometheus-stack` Helm chart. This
 
 - **Prometheus** — scrapes metrics from all k8s nodes, pods, and services. 7-day retention, 5 GB persistent storage.
 - **Grafana** — dashboards. Comes pre-configured with Kubernetes dashboards. 2 GB persistent storage.
-- **Alertmanager** — alert routing. 2 GB persistent storage.
+- **Alertmanager** — alert routing. 2 GB persistent storage. Configured to send all non-Watchdog alerts via email to `alert_receiver_email` (default: `admin@orangekuma.local`) through Mailpit.
 - **Node Exporter** — runs on every node, exports hardware/OS metrics.
 - **kube-state-metrics** — exports Kubernetes object metrics.
 
 This covers the "monitoring plus alerting" requirement for "Zeer goed."
+
+### Mailpit (namespace: `mailpit`)
+
+Lightweight mail catcher used as the Alertmanager SMTP backend. Catches all outgoing alert emails and displays them in a web UI — no real mail delivery, no external SMTP dependency. Deployed as a raw Kubernetes manifest.
+
+- **SMTP** — `mailpit.mailpit.svc.cluster.local:1025` (in-cluster), NodePort `30025` (external)
+- **Web UI** — NodePort `30026`
+
+The Alertmanager config is stored in the `alertmanager-prometheus-kube-prometheus-alertmanager` Secret and wired to Mailpit automatically during Phase 3.
 
 ### Semaphore (namespace: `semaphore`)
 
@@ -248,6 +257,7 @@ All services are accessible via NodePort on the k3s-server IP. You must be conne
 | **Grafana** | http://10.24.36.10:30083 | `admin` | `OrangeKuma2025!` |
 | **Semaphore** | http://10.24.36.10:30084 | `admin` | `OrangeKuma2025!` |
 | **Alertmanager** | http://10.24.36.10:30085 | — | (no auth) |
+| **Mailpit** | http://10.24.36.10:30026 | — | (no auth; mail catcher UI) |
 | **Headlamp** | http://10.24.36.10:30086 | — | (token auth, see below) |
 | **Management Tool** | http://10.24.36.10:30087 | — | (no auth; read-only dashboard) |
 | **Prometheus** | http://10.24.36.10:30090 | — | (no auth) |
@@ -482,14 +492,17 @@ project-cloud/
 ├── ansible/
 │   ├── ansible.cfg                        # Ansible configuration
 │   ├── group_vars/
-│   │   └── all.yml                        # Gedeelde vars: poorten, Gitea-credentials
+│   │   └── all.yml                        # Gedeelde vars voor Semaphore (provision-customer.yml)
 │   ├── inventories/
 │   │   ├── hanze/
 │   │   │   ├── inventory.yml              # Hanze cluster (10.24.36.x)
-│   │   │   └── group_vars/all.yml         # Hanze-specifieke vars: IPs, semaphore branch
-│   │   └── test/
-│   │       ├── inventory.yml              # Test cluster (10.24.35.x)
-│   │       └── group_vars/all.yml         # Test-specifieke vars: IPs, semaphore branch
+│   │   │   └── group_vars/all.yml         # Hanze-specifieke vars: IPs, poorten, semaphore branch
+│   │   ├── test/
+│   │   │   ├── inventory.yml              # Test cluster (10.24.35.x)
+│   │   │   └── group_vars/all.yml         # Test-specifieke vars: IPs, poorten, semaphore branch
+│   │   └── acc/
+│   │       ├── inventory.yml              # Acc cluster (10.24.39.x)
+│   │       └── group_vars/all.yml         # Acc-specifieke vars: IPs, poorten, semaphore branch
 │   ├── playbooks/
 │   │   ├── create-vms.yml                 # Phase 1: Create VMs on Proxmox
 │   │   ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
@@ -506,3 +519,11 @@ project-cloud/
         ├── deployment.yml.j2              # MT dashboard: Deployment/Service/RBAC/ConfigMap
         └── PIVOT-NOTES.md                 # Rationale for the read-only pivot
 ```
+
+### Group vars: twee lagen
+
+Er zijn twee niveaus van variabelen:
+
+- **`ansible/group_vars/all.yml`** — gedeelde platformvariabelen die via `vars_files` worden geladen door `provision-customer.yml` in Semaphore (Semaphore gebruikt geen inventory). Bevat alleen variabelen die relevant zijn voor klantenprovisioning (Gitea credentials, poorten). **Niet uitbreiden met bootstrap-only variabelen** — dit raakt Semaphore-driven workflows.
+
+- **`ansible/inventories/<env>/group_vars/all.yml`** — omgevingsspecifieke variabelen geladen via de inventory bij bootstrap en setup playbooks. Hier horen variabelen thuis als `k3s_server_ip`, Mailpit-poorten en `alert_receiver_email`.

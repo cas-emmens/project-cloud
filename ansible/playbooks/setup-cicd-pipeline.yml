@@ -569,9 +569,10 @@
         trap "rm -rf $TMPDIR" EXIT
         git clone --bare "{{ item.item.github_url }}" "$TMPDIR/repo.git"
         git -C "$TMPDIR/repo.git" push --mirror \
-          "http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@localhost:{{ gitea_http_port }}/{{ gitea_org }}/{{ item.item.name }}.git"
+          "http://{{ gitea_admin_user }}:{{ gitea_admin_password }}@{{ k3s_server_ip }}:{{ gitea_http_port }}/{{ gitea_org }}/{{ item.item.name }}.git"
       args:
         executable: /bin/bash
+      delegate_to: localhost
       loop: "{{ repo_checks.results }}"
       loop_control:
         label: "{{ item.item.name }}"
