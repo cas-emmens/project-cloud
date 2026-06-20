@@ -32,4 +32,4 @@ gitea_org: orange
 
 # ─── Semaphore repository ─────────────────────────────────────────────────────
 semaphore_repo_url: "https://github.com/cas-emmens/project-cloud.git"
-semaphore_repo_branch: "feat/test-environment-inventory"
+semaphore_repo_branch: "development"
