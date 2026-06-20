@@ -1,0 +1,6 @@
+---
+drone_namespace: drone
+drone_server_image: "drone/drone:2.20.0"
+drone_runner_image: "drone/drone-runner-docker:1"
+drone_dind_image: "docker:26-dind"
+drone_persistence_size: "2Gi"

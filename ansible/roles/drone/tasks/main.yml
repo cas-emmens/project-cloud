@@ -1,0 +1,234 @@
+---
+# ── OAuth app aanmaken in Gitea (voor Drone zelf, Optie A) ──────────────────
+- name: Create Drone OAuth app in Gitea
+  ansible.builtin.shell: |
+    until curl -sf http://localhost:{{ gitea_http_port }}/api/v1/version; do
+      sleep 5
+    done
+
+    EXISTING=$(curl -sf -u {{ gitea_admin_user }}:{{ gitea_admin_password }} \
+      "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2" | \
+      python3 -c "import sys,json; apps=json.load(sys.stdin); print(next((a['client_id'] for a in apps if a['name']=='drone'), ''))" 2>/dev/null)
+
+    if [ -n "$EXISTING" ]; then
+      echo "EXISTING:$EXISTING"
+      exit 0
+    fi
+
+    RESULT=$(curl -sf -X POST -u {{ gitea_admin_user }}:{{ gitea_admin_password }} \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "drone",
+        "redirect_uris": ["http://{{ k3s_server_ip }}/login"],
+        "confidential_client": true
+      }' \
+      "http://localhost:{{ gitea_http_port }}/api/v1/user/applications/oauth2")
+
+    CLIENT_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['client_id'])")
+    CLIENT_SECRET=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['client_secret'])")
+
+    echo "CLIENT_ID:$CLIENT_ID"
+    echo "CLIENT_SECRET:$CLIENT_SECRET"
+  register: drone_oauth
+  changed_when: false
+
+- name: Parse Drone OAuth credentials (nieuw)
+  ansible.builtin.set_fact:
+    drone_client_id: "{{ drone_oauth.stdout_lines | select('match', '.*CLIENT_ID:.*') | first | regex_replace('.*CLIENT_ID:', '') | default('') }}"
+    drone_client_secret: "{{ drone_oauth.stdout_lines | select('match', '.*CLIENT_SECRET:.*') | first | regex_replace('.*CLIENT_SECRET:', '') | default('') }}"
+  when: "'CLIENT_SECRET' in drone_oauth.stdout"
+
+- name: Parse Drone OAuth credentials (bestaand)
+  ansible.builtin.set_fact:
+    drone_client_id: "{{ drone_oauth.stdout_lines | select('match', '.*EXISTING:.*') | first | regex_replace('.*EXISTING:', '') }}"
+  when: "'EXISTING' in drone_oauth.stdout"
+
+# ── Admin token: hergebruik bestaand of genereer nieuw ──────────────────────
+- name: Check if Drone admin token already exists
+  ansible.builtin.shell: |
+    kubectl -n {{ drone_namespace }} get secret drone-secrets \
+      -o jsonpath='{.data.DRONE_ADMIN_TOKEN}' 2>/dev/null | base64 -d
+  register: existing_drone_admin_token
+  changed_when: false
+  failed_when: false
+
+- name: Generate Drone admin token (alleen als ontbrekend)
+  ansible.builtin.shell: openssl rand -hex 16
+  register: new_drone_admin_token
+  when: existing_drone_admin_token.stdout == ''
+  changed_when: false
+
+- name: Set drone_admin_token fact
+  ansible.builtin.set_fact:
+    drone_admin_token: >-
+      {{ existing_drone_admin_token.stdout
+         if existing_drone_admin_token.stdout != ''
+         else new_drone_admin_token.stdout }}
+
+- name: Generate Drone RPC secret
+  ansible.builtin.shell: openssl rand -hex 16
+  register: drone_rpc_secret_raw
+  changed_when: false
+
+- name: Create Drone secret
+  ansible.builtin.shell: |
+    kubectl -n {{ drone_namespace }} create secret generic drone-secrets \
+      --from-literal=DRONE_GITEA_CLIENT_ID="{{ drone_client_id }}" \
+      --from-literal=DRONE_GITEA_CLIENT_SECRET="{{ drone_client_secret }}" \
+      --from-literal=DRONE_RPC_SECRET="{{ drone_rpc_secret_raw.stdout }}" \
+      --from-literal=DRONE_ADMIN_TOKEN="{{ drone_admin_token }}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  when: "'EXISTING' not in drone_oauth.stdout"
+  changed_when: false
+
+# ── Drone Server deployment ──────────────────────────────────────────────────
+- name: Deploy Drone Server
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: drone-server
+      namespace: {{ drone_namespace }}
+    spec:
+      replicas: 1
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app: drone-server
+      template:
+        metadata:
+          labels:
+            app: drone-server
+        spec:
+          enableServiceLinks: false
+          containers:
+          - name: drone
+            image: {{ drone_server_image }}
+            ports:
+            - containerPort: 80
+            env:
+            - name: DRONE_GITEA_SERVER
+              value: "http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
+            - name: DRONE_GITEA_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: drone-secrets
+                  key: DRONE_GITEA_CLIENT_ID
+            - name: DRONE_GITEA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: drone-secrets
+                  key: DRONE_GITEA_CLIENT_SECRET
+            - name: DRONE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: drone-secrets
+                  key: DRONE_RPC_SECRET
+            - name: DRONE_SERVER_HOST
+              value: "{{ k3s_server_ip }}"
+            - name: DRONE_SERVER_PROTO
+              value: "http"
+            - name: DRONE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: drone-secrets
+                  key: DRONE_ADMIN_TOKEN
+            - name: DRONE_USER_CREATE
+              value: "username:{{ gitea_admin_user }},machine:false,admin:true,token:{{ drone_admin_token }}"
+            volumeMounts:
+            - name: data
+              mountPath: /data
+          volumes:
+          - name: data
+            persistentVolumeClaim:
+              claimName: drone-server-pvc
+    ---
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: drone-server-pvc
+      namespace: {{ drone_namespace }}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: longhorn
+      resources:
+        requests:
+          storage: {{ drone_persistence_size }}
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: drone-server
+      namespace: {{ drone_namespace }}
+    spec:
+      type: LoadBalancer
+      selector:
+        app: drone-server
+      ports:
+      - port: 80
+        targetPort: 80
+    EOF
+  changed_when: false
+
+# ── Drone Runner deployment ──────────────────────────────────────────────────
+- name: Deploy Drone Runner
+  ansible.builtin.shell: |
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: drone-runner-docker
+      namespace: {{ drone_namespace }}
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: drone-runner-docker
+      template:
+        metadata:
+          labels:
+            app: drone-runner-docker
+        spec:
+          enableServiceLinks: false
+          containers:
+          - name: dind
+            image: {{ drone_dind_image }}
+            securityContext:
+              privileged: true
+            env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+            args:
+              - "--host=tcp://0.0.0.0:2375"
+              - "--tls=false"
+              - "--insecure-registry={{ k3s_server_ip }}:{{ gitea_http_port }}"
+            volumeMounts:
+            - name: docker-storage
+              mountPath: /var/lib/docker
+          - name: runner
+            image: {{ drone_runner_image }}
+            env:
+            - name: DRONE_RPC_HOST
+              value: "drone-server.{{ drone_namespace }}.svc:80"
+            - name: DRONE_RPC_PROTO
+              value: "http"
+            - name: DRONE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: drone-secrets
+                  key: DRONE_RPC_SECRET
+            - name: DOCKER_HOST
+              value: "tcp://localhost:2375"
+            - name: DRONE_RUNNER_CAPACITY
+              value: "2"
+            - name: DRONE_RUNNER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumes:
+          - name: docker-storage
+            emptyDir: {}
+    EOF
+  changed_when: false
