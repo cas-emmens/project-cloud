@@ -1,0 +1,117 @@
+---
+- name: Add Prometheus community Helm repo
+  ansible.builtin.shell: |
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo update
+  changed_when: false
+
+# Datasources worden expliciet geprovisiond zodat de sidecar niet nodig is.
+# Dashboard sidecar blijft aan en scant ALL namespaces voor grafana_dashboard=1 labels.
+- name: Render Grafana provisioning values file
+  ansible.builtin.copy:
+    dest: /tmp/grafana-values.yaml
+    mode: "0644"
+    content: |
+      grafana:
+        defaultDashboardsEnabled: true
+        sidecar:
+          datasources:
+            enabled: false
+          dashboards:
+            enabled: true
+            label: grafana_dashboard
+            labelValue: "1"
+            searchNamespace: ALL
+            provider:
+              foldersFromFilesStructure: true
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Prometheus
+                uid: prometheus
+                type: prometheus
+                access: proxy
+                url: http://prometheus-kube-prometheus-prometheus.monitoring:9090
+                isDefault: true
+              - name: Alertmanager
+                uid: alertmanager
+                type: alertmanager
+                access: proxy
+                url: http://prometheus-kube-prometheus-alertmanager.monitoring:9093
+                jsonData:
+                  implementation: prometheus
+  changed_when: false
+
+- name: Install kube-prometheus-stack
+  ansible.builtin.shell: |
+    helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+      --namespace {{ prometheus_namespace }} \
+      --version {{ prometheus_stack_chart_version }} \
+      -f /tmp/grafana-values.yaml \
+      --set grafana.service.type=NodePort \
+      --set grafana.service.nodePort={{ grafana_port }} \
+      --set grafana.adminPassword={{ gitea_admin_password }} \
+      --set grafana.persistence.enabled=true \
+      --set grafana.persistence.storageClassName=longhorn \
+      --set grafana.persistence.size={{ grafana_storage_size }} \
+      --set prometheus.service.type=NodePort \
+      --set prometheus.service.nodePort={{ prometheus_port }} \
+      --set prometheus.prometheusSpec.retention={{ prometheus_retention }} \
+      --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName=longhorn \
+      --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage={{ prometheus_storage_size }} \
+      --set alertmanager.service.type=NodePort \
+      --set alertmanager.service.nodePort={{ alertmanager_port }} \
+      --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.storageClassName=longhorn \
+      --set alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.resources.requests.storage={{ alertmanager_storage_size }} \
+      --wait --timeout {{ prometheus_install_timeout }}
+  register: prometheus_install
+  changed_when: "'has been upgraded' in prometheus_install.stdout or 'has been installed' in prometheus_install.stdout"
+
+# Prometheus en Alertmanager exposen poort 8080 (config-reloader) als willekeurige
+# NodePort. Expliciet pinnen voorkomt conflicten bij greenfield deploys.
+- name: Pin Prometheus reloader NodePort
+  ansible.builtin.shell: |
+    set -euo pipefail
+    IDX=$(kubectl -n {{ prometheus_namespace }} get svc prometheus-kube-prometheus-prometheus -o json | \
+      python3 -c "import sys,json; s=json.load(sys.stdin); print(next(i for i,p in enumerate(s['spec']['ports']) if p['port']==8080))")
+    CURRENT=$(kubectl -n {{ prometheus_namespace }} get svc prometheus-kube-prometheus-prometheus -o json | \
+      python3 -c "import sys,json; s=json.load(sys.stdin); print(s['spec']['ports'][${IDX}]['nodePort'])")
+    if [ "$CURRENT" = "{{ prometheus_reloader_port }}" ]; then echo "already set"; exit 0; fi
+    kubectl -n {{ prometheus_namespace }} patch svc prometheus-kube-prometheus-prometheus --type=json \
+      -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/${IDX}/nodePort\",\"value\":{{ prometheus_reloader_port }}}]"
+  args:
+    executable: /bin/bash
+  register: prometheus_reloader_patch
+  changed_when: "'patched' in prometheus_reloader_patch.stdout"
+
+- name: Pin Alertmanager reloader NodePort
+  ansible.builtin.shell: |
+    set -euo pipefail
+    IDX=$(kubectl -n {{ prometheus_namespace }} get svc prometheus-kube-prometheus-alertmanager -o json | \
+      python3 -c "import sys,json; s=json.load(sys.stdin); print(next(i for i,p in enumerate(s['spec']['ports']) if p['port']==8080))")
+    CURRENT=$(kubectl -n {{ prometheus_namespace }} get svc prometheus-kube-prometheus-alertmanager -o json | \
+      python3 -c "import sys,json; s=json.load(sys.stdin); print(s['spec']['ports'][${IDX}]['nodePort'])")
+    if [ "$CURRENT" = "{{ alertmanager_reloader_port }}" ]; then echo "already set"; exit 0; fi
+    kubectl -n {{ prometheus_namespace }} patch svc prometheus-kube-prometheus-alertmanager --type=json \
+      -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/${IDX}/nodePort\",\"value\":{{ alertmanager_reloader_port }}}]"
+  args:
+    executable: /bin/bash
+  register: alertmanager_reloader_patch
+  changed_when: "'patched' in alertmanager_reloader_patch.stdout"
+
+- name: Copy Orange platform dashboard JSON to the node
+  ansible.builtin.copy:
+    src: orange-platform-dashboard.json
+    dest: /tmp/orange-platform-dashboard.json
+    mode: "0644"
+
+- name: Create/refresh the Orange platform Grafana dashboard ConfigMap
+  ansible.builtin.shell: |
+    kubectl -n {{ prometheus_namespace }} create configmap orange-platform-dashboard \
+      --from-file=orange-platform.json=/tmp/orange-platform-dashboard.json \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n {{ prometheus_namespace }} label configmap orange-platform-dashboard \
+      grafana_dashboard=1 --overwrite
+  register: orange_dashboard_cm
+  changed_when: "'configured' in orange_dashboard_cm.stdout or 'created' in orange_dashboard_cm.stdout"

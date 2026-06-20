@@ -1,0 +1,49 @@
+---
+- name: Deploy Mailpit
+  ansible.builtin.shell: |
+    kubectl apply -f - <<'EOF'
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: mailpit
+      namespace: {{ mailpit_namespace }}
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: mailpit
+      template:
+        metadata:
+          labels:
+            app: mailpit
+        spec:
+          containers:
+            - name: mailpit
+              image: {{ mailpit_image }}
+              ports:
+                - containerPort: 1025
+                - containerPort: 8025
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: mailpit
+      namespace: {{ mailpit_namespace }}
+    spec:
+      type: NodePort
+      selector:
+        app: mailpit
+      ports:
+        - name: smtp
+          port: 1025
+          targetPort: 1025
+          nodePort: {{ mailpit_smtp_port }}
+        - name: web
+          port: 8025
+          targetPort: 8025
+          nodePort: {{ mailpit_web_port }}
+    EOF
+  args:
+    executable: /bin/bash
+  register: mailpit_deploy
+  changed_when: "'configured' in mailpit_deploy.stdout or 'created' in mailpit_deploy.stdout"

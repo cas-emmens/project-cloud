@@ -1,0 +1,8 @@
+---
+prometheus_stack_chart_version: "65.1.1"
+prometheus_namespace: monitoring
+prometheus_retention: "7d"
+prometheus_storage_size: "5Gi"
+grafana_storage_size: "2Gi"
+alertmanager_storage_size: "2Gi"
+prometheus_install_timeout: "15m"
