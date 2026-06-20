@@ -79,11 +79,11 @@ Each node: 2x Intel Xeon E5-2690 v4 @ 2.60GHz, 23 GB RAM, ~33 GB disk.
 | 301 | k3s-agent-1 | 10.24.36.11 | CE02 | Agent (worker) |
 | 302 | k3s-agent-2 | 10.24.36.12 | CE3 | Agent (worker) |
 
-Each VM: 2 vCPU, 16 GB RAM, 25 GB disk, Debian 12 (Bookworm) cloud-init image.
+Each VM: 2 vCPU, 16 GB RAM, 100 GB disk, Debian 12 (Bookworm) cloud-init image.
 
 ### Networking
 
-All VMs are bridged on `vmbr0` (subnet `10.24.36.0/24`, gateway `10.24.36.1`). The school gateway does NOT provide DNS resolution for VMs, so DNS is configured to use `8.8.8.8` directly. Services are exposed via Kubernetes NodePorts on the k3s-server IP (`10.24.36.10`).
+All VMs are bridged on `vmbr0` (subnet `10.24.36.0/24`, gateway `10.24.36.1`). The school gateway does NOT provide DNS resolution for VMs, so DNS is configured to use `1.1.1.1` directly. Services are exposed via Kubernetes NodePorts on the k3s-server IP (`10.24.36.10`).
 
 ---
 
@@ -108,8 +108,8 @@ VMs are created by the `playbooks/create-vms.yml` Ansible playbook. It runs agai
 1. `qm create` — creates the VM with 2 vCPU, 16 GB RAM, virtio NIC on vmbr0.
 2. `qm importdisk` — imports the Debian 12 qcow2 cloud image into local-lvm storage.
 3. `qm set` — attaches the disk, adds a cloud-init drive.
-4. Cloud-init configuration — sets static IP, gateway, DNS (`8.8.8.8`), SSH public key, and user (`debian`).
-5. `qm resize` — expands disk to 25 GB.
+4. Cloud-init configuration — sets static IP, gateway, DNS (`1.1.1.1`), SSH public key, and user (`debian`).
+5. `qm resize` — expands disk to 100 GB.
 6. `qm start` — boots the VM.
 7. Waits for SSH to become available (timeout 180s).
 
@@ -204,7 +204,7 @@ Full monitoring stack installed via the `kube-prometheus-stack` Helm chart. This
 
 - **Prometheus** — scrapes metrics from all k8s nodes, pods, and services. 7-day retention, 5 GB persistent storage.
 - **Grafana** — dashboards. Comes pre-configured with Kubernetes dashboards. 2 GB persistent storage.
-- **Alertmanager** — alert routing. 2 GB persistent storage. Configured to send all non-Watchdog alerts via email to `alert_receiver_email` (default: `admin@orangekuma.local`) through Mailpit.
+- **Alertmanager** — alert routing. 2 GB persistent storage. Configured to send all alerts (inclusief Watchdog als heartbeat) via email to `alert_receiver_email` (default: `admin@orangekuma.local`) through Mailpit.
 - **Node Exporter** — runs on every node, exports hardware/OS metrics.
 - **kube-state-metrics** — exports Kubernetes object metrics.
 
@@ -317,7 +317,7 @@ The deploy script runs four phases:
 
 1. **Phase 1** (`create-vms.yml`) — Create 3 VMs on Proxmox with cloud-init.
 2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents. Installs `open-iscsi` and `qemu-guest-agent` on all nodes.
-3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Longhorn, Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp).
+3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Longhorn, Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana/Alertmanager, Mailpit, Semaphore + templates, Headlamp).
 4. **Phase 4** (`setup-cicd-pipeline.yml`) — Wire CI/CD + GitOps: Gitea org/repos, Drone pipelines, Argo CD AppProject + Applications, Image Updater config, the Semaphore provisioning project, and the Management Tool dashboard.
 
 You can also resume from a specific phase if an earlier phase already completed:
@@ -336,7 +336,7 @@ All playbooks are idempotent — running them again won't break anything.
 
 ### DNS resolution on VMs
 
-The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the `10.24.36.0/24` network. The Proxmox nodes themselves use `1.1.1.1`. We configured the VMs to use `8.8.8.8` via cloud-init and `systemd-resolved`. If DNS stops working after a reboot, check `/etc/resolv.conf` on the VMs.
+The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the `10.24.36.0/24` network. The Proxmox nodes themselves use `1.1.1.1`. We configured the VMs to use `1.1.1.1` via cloud-init. If DNS stops working after a reboot, check `/etc/resolv.conf` on the VMs.
 
 ### Semaphore service name conflict
 
@@ -509,11 +509,18 @@ project-cloud/
 │   │   ├── install-k3s.yml                # Phase 2: Install k3s cluster
 │   │   ├── bootstrap-platform.yml         # Phase 3: Deploy platform services
 │   │   ├── setup-cicd-pipeline.yml        # Phase 4: CI/CD + GitOps + Semaphore + MT
+│   │   ├── setup-env.yml                  # Schrijf inventory vars naar /root/.env op control node
 │   │   ├── provision-customer.yml         # Shared backend for both Semaphore templates
 │   │   ├── provision-customer-management.yml  # Legacy (pre-GitOps), unused
 │   │   └── remove-customer.yml            # Remove a customer instance
+│   ├── roles/
+│   │   └── setup-env/                     # Role voor setup-env.yml
+│   │       ├── defaults/main.yml          # env_file: /root/.env
+│   │       └── tasks/main.yml             # lineinfile K3S_SERVER_IP + debug instructie
 │   └── templates/
 │       └── customer-instance.yml.j2       # Rendered per-customer GitOps manifest
+├── tests/
+│   └── test-alertmanager.sh               # Test Alertmanager → Mailpit keten (inject + watchdog)
 └── k8s/
     └── management-tool/
         ├── deployment.yml.j2              # MT dashboard: Deployment/Service/RBAC/ConfigMap
