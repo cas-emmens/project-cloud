@@ -405,6 +405,7 @@
           --version {{ argocd_chart_version }} \
           --set server.service.type=NodePort \
           --set server.service.nodePortHttp={{ argocd_port }} \
+          --set server.service.nodePortHttps={{ argocd_https_port }} \
           --set server.extraArgs[0]=--insecure \
           --set configs.params."server\.insecure"=true \
           --set configs.cm."timeout\.reconciliation"=30s \
@@ -538,6 +539,36 @@
           --wait --timeout 15m
       register: prometheus_install
       changed_when: "'has been upgraded' in prometheus_install.stdout or 'has been installed' in prometheus_install.stdout"
+
+    - name: Pin Prometheus reloader NodePort (poort 8080)
+      shell: |
+        set -euo pipefail
+        IDX=$(kubectl -n monitoring get svc prometheus-kube-prometheus-prometheus -o json | \
+          python3 -c "import sys,json; s=json.load(sys.stdin); print(next(i for i,p in enumerate(s['spec']['ports']) if p['port']==8080))")
+        CURRENT=$(kubectl -n monitoring get svc prometheus-kube-prometheus-prometheus -o json | \
+          python3 -c "import sys,json; s=json.load(sys.stdin); print(s['spec']['ports'][${IDX}]['nodePort'])")
+        if [ "$CURRENT" = "{{ prometheus_reloader_port }}" ]; then echo "already set"; exit 0; fi
+        kubectl -n monitoring patch svc prometheus-kube-prometheus-prometheus --type=json \
+          -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/${IDX}/nodePort\",\"value\":{{ prometheus_reloader_port }}}]"
+      args:
+        executable: /bin/bash
+      register: prometheus_reloader_patch
+      changed_when: "'patched' in prometheus_reloader_patch.stdout"
+
+    - name: Pin Alertmanager reloader NodePort (poort 8080)
+      shell: |
+        set -euo pipefail
+        IDX=$(kubectl -n monitoring get svc prometheus-kube-prometheus-alertmanager -o json | \
+          python3 -c "import sys,json; s=json.load(sys.stdin); print(next(i for i,p in enumerate(s['spec']['ports']) if p['port']==8080))")
+        CURRENT=$(kubectl -n monitoring get svc prometheus-kube-prometheus-alertmanager -o json | \
+          python3 -c "import sys,json; s=json.load(sys.stdin); print(s['spec']['ports'][${IDX}]['nodePort'])")
+        if [ "$CURRENT" = "{{ alertmanager_reloader_port }}" ]; then echo "already set"; exit 0; fi
+        kubectl -n monitoring patch svc prometheus-kube-prometheus-alertmanager --type=json \
+          -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/${IDX}/nodePort\",\"value\":{{ alertmanager_reloader_port }}}]"
+      args:
+        executable: /bin/bash
+      register: alertmanager_reloader_patch
+      changed_when: "'patched' in alertmanager_reloader_patch.stdout"
 
     # Custom platform dashboard: copied to the node and wrapped in a
     # ConfigMap carrying the grafana_dashboard=1 label so the Grafana
