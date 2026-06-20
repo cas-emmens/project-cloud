@@ -559,6 +559,130 @@
       changed_when: "'configured' in orange_dashboard_cm.stdout or 'created' in orange_dashboard_cm.stdout"
 
     # =========================================
+    # MAILPIT (Mail catcher)
+    # =========================================
+    - name: Create mailpit namespace
+      shell: kubectl create namespace mailpit --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+
+    - name: Deploy Mailpit
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: mailpit
+          namespace: mailpit
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: mailpit
+          template:
+            metadata:
+              labels:
+                app: mailpit
+            spec:
+              containers:
+                - name: mailpit
+                  image: axllent/mailpit:v1.21.6
+                  ports:
+                    - containerPort: 1025
+                    - containerPort: 8025
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: mailpit
+          namespace: mailpit
+        spec:
+          type: NodePort
+          selector:
+            app: mailpit
+          ports:
+            - name: smtp
+              port: 1025
+              targetPort: 1025
+              nodePort: {{ mailpit_smtp_port }}
+            - name: web
+              port: 8025
+              targetPort: 8025
+              nodePort: {{ mailpit_web_port }}
+        EOF
+      args:
+        executable: /bin/bash
+      register: mailpit_deploy
+      changed_when: "'configured' in mailpit_deploy.stdout or 'created' in mailpit_deploy.stdout"
+
+    # =========================================
+    # ALERTMANAGER EMAIL CONFIGURATIE
+    # =========================================
+    - name: Configure Alertmanager with email routing via Mailpit
+      shell: |
+        kubectl -n monitoring create secret generic \
+          alertmanager-prometheus-kube-prometheus-alertmanager \
+          --from-literal=alertmanager.yaml='
+        global:
+          resolve_timeout: 5m
+          smtp_smarthost: "mailpit.mailpit.svc.cluster.local:1025"
+          smtp_from: "alertmanager@orangekuma.local"
+          smtp_require_tls: false
+        inhibit_rules:
+        - equal:
+          - namespace
+          - alertname
+          source_matchers:
+          - severity = critical
+          target_matchers:
+          - severity =~ warning|info
+        - equal:
+          - namespace
+          - alertname
+          source_matchers:
+          - severity = warning
+          target_matchers:
+          - severity = info
+        - equal:
+          - namespace
+          source_matchers:
+          - alertname = InfoInhibitor
+          target_matchers:
+          - severity = info
+        - target_matchers:
+          - alertname = InfoInhibitor
+        receivers:
+        - name: "null"
+        - name: email
+          email_configs:
+          - to: "{{ alert_receiver_email }}"
+        route:
+          group_by:
+          - namespace
+          group_interval: 5m
+          group_wait: 30s
+          receiver: email
+          repeat_interval: 12h
+          routes:
+          - matchers:
+            - alertname = "Watchdog"
+            receiver: "null"
+        templates:
+        - /etc/alertmanager/config/*.tmpl
+        ' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: alertmanager_config
+      changed_when: "'configured' in alertmanager_config.stdout or 'created' in alertmanager_config.stdout"
+
+    - name: Restart Alertmanager to pick up new config
+      shell: |
+        kubectl -n monitoring rollout restart \
+          statefulset/alertmanager-prometheus-kube-prometheus-alertmanager
+      register: alertmanager_restart
+      changed_when: alertmanager_config.changed
+
+    # =========================================
     # SEMAPHORE (Ansible UI)
     # =========================================
     # The Semaphore access-key encryption key must be stable across
@@ -1170,6 +1294,8 @@
           - ""
           - "Prometheus:    http://{{ k3s_server_ip }}:{{ prometheus_port }}"
           - "Alertmanager:  http://{{ k3s_server_ip }}:{{ alertmanager_port }}"
+          - "Mailpit:       http://{{ k3s_server_ip }}:{{ mailpit_web_port }}"
+          - "               (mail catcher — alerts ontvangen via SMTP :{{ mailpit_smtp_port }})"
           - ""
           - "Semaphore:     http://{{ k3s_server_ip }}:{{ semaphore_port }}"
           - "               User: admin / {{ gitea_admin_password }}"
