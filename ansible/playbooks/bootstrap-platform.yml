@@ -34,44 +34,11 @@
     ingress_nginx_chart_version: "4.11.3"
     semaphore_image: "semaphoreui/semaphore:v2.10.34"
 
+  roles:
+    - helm
+    - longhorn
+
   tasks:
-    # =========================================
-    # HELM INSTALLATION
-    # =========================================
-    - name: Check if helm is installed
-      stat:
-        path: /usr/local/bin/helm
-      register: helm_binary
-
-    - name: Install Helm
-      shell: |
-        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      when: not helm_binary.stat.exists
-
-    # =========================================
-    # LONGHORN (Distributed Storage)
-    # =========================================
-    - name: Add Longhorn Helm repo
-      shell: |
-        helm repo add longhorn https://charts.longhorn.io
-        helm repo update
-      changed_when: false
-
-    - name: Install Longhorn
-      shell: |
-        helm upgrade --install longhorn longhorn/longhorn \
-          --namespace longhorn-system \
-          --create-namespace \
-          --wait --timeout 10m
-      register: longhorn_install
-      changed_when: "'has been upgraded' in longhorn_install.stdout or 'has been installed' in longhorn_install.stdout"
-
-    - name: Remove longhorn as default StorageClass
-      shell: |
-        kubectl patch storageclass longhorn \
-          -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
-      changed_when: false
-
     # =========================================
     # NAMESPACES
     # =========================================

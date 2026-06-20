@@ -1,0 +1,22 @@
+---
+- name: Add Longhorn Helm repo
+  ansible.builtin.shell: |
+    helm repo add longhorn https://charts.longhorn.io
+    helm repo update
+  changed_when: false
+
+- name: Install Longhorn
+  ansible.builtin.shell: |
+    helm upgrade --install longhorn longhorn/longhorn \
+      --namespace {{ longhorn_namespace }} \
+      --create-namespace \
+      {{ '--version ' + longhorn_chart_version if longhorn_chart_version else '' }} \
+      --wait --timeout {{ longhorn_install_timeout }}
+  register: longhorn_install
+  changed_when: "'has been upgraded' in longhorn_install.stdout or 'has been installed' in longhorn_install.stdout"
+
+- name: Disable Longhorn as default StorageClass
+  ansible.builtin.shell: |
+    kubectl patch storageclass longhorn \
+      -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+  changed_when: false

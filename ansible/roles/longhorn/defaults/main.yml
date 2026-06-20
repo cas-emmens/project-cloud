@@ -1,0 +1,4 @@
+---
+longhorn_namespace: longhorn-system
+longhorn_chart_version: ""
+longhorn_install_timeout: "10m"
