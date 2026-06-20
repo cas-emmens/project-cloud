@@ -217,3 +217,22 @@ gebruikersnamen en wachtwoorden, en weggeschreven naar `/root/platform-summary.t
 VM-IDs in de test inventory gewijzigd naar 210/211/212 zodat het laatste cijfer
 overeenkomt met het laatste octet van het IP-adres (`10.24.35.10` → VM 210).
 
+**Architectuurdiagram toegevoegd**
+
+`DOCUMENTATION.md` uitgebreid met drie Mermaid-diagrammen:
+- Infrastructuur (Proxmox nodes → k3s cluster)
+- Services (namespaces en hun onderlinge verbindingen)
+- CI/CD flow (push → Gitea → Drone → Argo CD → klant)
+
+**Drone OAuth client_secret blijft behouden bij re-run**
+
+De taak die het Drone OAuth-token aanmaakte in Gitea overschreef bij elke run de
+`client_secret`. Drone had de oude waarde al opgeslagen, waardoor authenticatie brak.
+Fix: controleer eerst of het Gitea OAuth-token al bestaat en sla de aanmaak over als dat zo is.
+
+**Grafana customer instances dashboard: pod-fase als metric**
+
+Het dashboard-panel voor Uptime Kuma-instanties gebruikte een metric die niet altijd
+beschikbaar was. Gewijzigd naar `kube_pod_status_phase{phase="Running"}` zodat het
+panel stabiel werkt zodra de pod draait.
+
