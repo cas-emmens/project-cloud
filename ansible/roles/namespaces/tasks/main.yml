@@ -1,0 +1,14 @@
+---
+- name: Create platform namespaces
+  ansible.builtin.shell: |
+    kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
+  loop:
+    - gitea
+    - drone
+    - argocd
+    - monitoring
+    - semaphore
+    - orange-kuma
+    - mailpit
+    - ingress-nginx
+  changed_when: false

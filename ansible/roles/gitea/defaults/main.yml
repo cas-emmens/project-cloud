@@ -1,0 +1,5 @@
+---
+gitea_chart_version: "10.4.1"
+gitea_namespace: gitea
+gitea_persistence_size: "5Gi"
+gitea_install_timeout: "10m"

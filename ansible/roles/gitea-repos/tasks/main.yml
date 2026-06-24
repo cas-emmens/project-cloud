@@ -1,0 +1,253 @@
+---
+- name: Wait for Gitea API to be responsive
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/version"
+    status_code: 200
+  register: gitea_health
+  retries: 12
+  delay: 10
+  until: gitea_health.status == 200
+  failed_when: gitea_health.status != 200
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+- name: Verify Gitea is reachable
+  ansible.builtin.fail:
+    msg: >
+      Gitea is niet bereikbaar op http://localhost:{{ gitea_http_port }}.
+      Controleer of Phase 3 (bootstrap-platform.yml) succesvol is uitgevoerd.
+  when: gitea_health.status is defined and gitea_health.status != 200
+
+- name: Wait for Drone CI to be responsive
+  ansible.builtin.uri:
+    url: "http://localhost:{{ drone_port }}/healthz"
+    status_code: 200
+  register: drone_health
+  retries: 12
+  delay: 10
+  until: drone_health.status == 200
+  failed_when: drone_health.status != 200
+
+- name: Verify Drone is reachable
+  ansible.builtin.fail:
+    msg: >
+      Drone CI is niet bereikbaar op http://localhost:{{ drone_port }}.
+      Controleer of de drone-server deployment actief is.
+  when: drone_health.status is defined and drone_health.status != 200
+
+- name: Check if Gitea organization exists
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/orgs/{{ gitea_org }}"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: org_check
+  retries: 10
+  delay: 6
+  until: org_check.status in [200, 404]
+
+- name: Create Gitea organization
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/orgs"
+    method: POST
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      username: "{{ gitea_org }}"
+      visibility: public
+      description: "Orange Kuma platform repositories"
+    status_code: 201
+  when: org_check.status == 404
+  register: org_create
+  retries: 10
+  delay: 6
+  until: org_create.status == 201
+
+- name: Log organization status
+  ansible.builtin.debug:
+    msg: >
+      Gitea organisatie '{{ gitea_org }}':
+      {{ 'aangemaakt' if org_check.status == 404 else 'bestaat al' }}.
+
+- name: Check if repositories exist in Gitea
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: repo_checks
+  retries: 10
+  delay: 6
+  until: repo_checks.status in [200, 404]
+  loop: "{{ repos }}"
+
+- name: Remove existing mirror repositories before normal import
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.item.name }}"
+    method: DELETE
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: 204
+  loop: "{{ repo_checks.results }}"
+  when:
+    - item.status == 200
+    - item.json.mirror | default(false) | bool
+
+- name: Create Gitea repositories
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/orgs/{{ gitea_org }}/repos"
+    method: POST
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "{{ item.item.name }}"
+      default_branch: "{{ item.item.default_branch }}"
+      private: false
+      auto_init: false
+    status_code: [201]
+  loop: "{{ repo_checks.results }}"
+  when: >
+    item.status == 404 or
+    (item.status == 200 and (item.json.mirror | default(false) | bool))
+  register: repo_creates
+  retries: 10
+  delay: 6
+  until: repo_creates.status == 201
+
+- name: Wait for repositories to be available in Gitea
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: repo_ready_check
+  retries: 12
+  delay: 5
+  until: repo_ready_check.status == 200
+  loop: "{{ repos }}"
+  changed_when: false
+
+- name: Log repository status
+  ansible.builtin.debug:
+    msg: "Repository '{{ item.item.name }}': beschikbaar in Gitea."
+  loop: "{{ repo_ready_check.results }}"
+
+- name: Ensure GitOps repositories exist in Gitea
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/orgs/{{ gitea_org }}/repos"
+    method: POST
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      description: "{{ item.description }}"
+      default_branch: "main"
+      auto_init: true
+      private: false
+    status_code: [201, 409]
+  loop:
+    - name: customer-instances
+      description: "Sales-provisioned customer Uptime Kuma instances"
+    - name: test-customers
+      description: "Ops-provisioned test customer instances"
+  loop_control:
+    label: "{{ item.name }}"
+  register: gitops_repo_create
+  retries: 10
+  delay: 6
+  until: gitops_repo_create.status in [201, 409]
+  changed_when: false
+
+- name: List existing Gitea tokens for admin user
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200]
+  register: gitea_existing_tokens
+  retries: 10
+  delay: 6
+  until: gitea_existing_tokens.status == 200
+  changed_when: false
+
+- name: Delete existing drone-oauth token in Gitea if present
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens/{{ item.id }}"
+    method: DELETE
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [204]
+  loop: "{{ gitea_existing_tokens.json | selectattr('name', 'equalto', 'drone-oauth') | list }}"
+  changed_when: true
+
+- name: Create Gitea personal access token for Drone repository sync
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens"
+    method: POST
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "drone-oauth"
+      scopes:
+        - "write:repository"
+        - "write:organization"
+        - "write:user"
+        - "write:admin"
+    status_code: [201]
+  register: gitea_drone_pat
+  retries: 10
+  delay: 6
+  until: gitea_drone_pat.status == 201
+
+- name: Delete existing argocd-gitops token in Gitea if present
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens/{{ item.id }}"
+    method: DELETE
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [204]
+  loop: "{{ gitea_existing_tokens.json | selectattr('name', 'equalto', 'argocd-gitops') | list }}"
+  changed_when: true
+
+- name: Create Gitea personal access token for Argo CD repository sync
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/users/{{ gitea_admin_user }}/tokens"
+    method: POST
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "argocd-gitops"
+      scopes:
+        - "read:repository"
+    status_code: [201]
+  register: gitea_argocd_pat
+  retries: 10
+  delay: 6
+  until: gitea_argocd_pat.status == 201
+
+- name: Fetch repo metadata from Gitea
+  ansible.builtin.uri:
+    url: "http://localhost:{{ gitea_http_port }}/api/v1/repos/{{ gitea_org }}/{{ item.name }}"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200]
+  register: gitea_repo_details
+  loop: "{{ repos }}"

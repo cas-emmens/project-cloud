@@ -1,0 +1,47 @@
+---
+- name: Ensure /etc/rancher/k3s directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+- name: Configure containerd insecure registry for Gitea
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/registries.yaml
+    content: |
+      mirrors:
+        "{{ k3s_server_ip }}:{{ gitea_http_port }}":
+          endpoint:
+            - "http://{{ k3s_server_ip }}:{{ gitea_http_port }}"
+    mode: "0644"
+  register: registry_config
+
+- name: Restart k3s server if registry config changed
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+  when:
+    - registry_config.changed
+    - inventory_hostname in groups['k3s_server']
+
+- name: Restart k3s agent if registry config changed
+  ansible.builtin.systemd:
+    name: k3s-agent
+    state: restarted
+  when:
+    - registry_config.changed
+    - inventory_hostname in groups['k3s_agents']
+
+- name: Wait for k3s to be ready after restart
+  ansible.builtin.shell: |
+    kubectl get nodes 2>/dev/null | grep -c Ready
+  register: nodes_ready
+  retries: 12
+  delay: 10
+  until: nodes_ready.stdout | int >= 1
+  when:
+    - registry_config.changed
+    - inventory_hostname in groups['k3s_server']
+  changed_when: false
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml

@@ -1,0 +1,2 @@
+---
+k3s_kubeconfig_local_path: "/tmp/kubeconfig-orange-kuma.yaml"

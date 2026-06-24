@@ -24,7 +24,7 @@
       "id": 2,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "11.0.0",
-      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(kube_namespace_labels{namespace=~\"customer-.*\"})", "legendFormat": "Customers", "refId": "A" } ],
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(count by (namespace) (kube_pod_status_phase{namespace=~\"customer-.*\", phase=\"Running\"} == 1))", "legendFormat": "Customers", "refId": "A" } ],
       "title": "Customer Instances",
       "type": "stat"
     },

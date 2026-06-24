@@ -1,0 +1,17 @@
+---
+# playbooks/setup-env.yml
+# Schrijft omgevingsvariabelen uit de inventory naar /root/.env
+#
+# Gebruik:
+#   ansible-playbook playbooks/setup-env.yml -i inventories/test/inventory.yml
+#   ansible-playbook playbooks/setup-env.yml -i inventories/hanze/inventory.yml
+#   ansible-playbook playbooks/setup-env.yml -i inventories/acc/inventory.yml
+#
+# Laad daarna de variabelen in je huidige shell:
+#   source ~/.env
+
+- name: Stel omgevingsvariabelen in vanuit inventory
+  hosts: k3s_server
+  gather_facts: false
+  roles:
+    - setup-env

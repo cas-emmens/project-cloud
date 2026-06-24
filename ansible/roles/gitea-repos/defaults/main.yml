@@ -1,0 +1,8 @@
+---
+repos:
+  - name: orange-uptime-kuma
+    github_url: https://github.com/danielpastoor/orange-uptime-kuma
+    default_branch: main
+  - name: orange-uptime-kuma-management-tool
+    github_url: https://github.com/danielpastoor/orange-uptime-kuma-management-tool
+    default_branch: main

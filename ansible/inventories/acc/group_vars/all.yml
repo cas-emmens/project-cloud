@@ -1,0 +1,38 @@
+---
+# group_vars/all.yml — Acc-omgeving
+
+# ─── Ansible ──────────────────────────────────────────────────────────────────
+ansible_python_interpreter: auto_silent
+
+# ─── Infrastructuur ───────────────────────────────────────────────────────────
+k3s_server_ip: "10.24.39.10"
+domain_suffix: "10.24.39.10.nip.io"
+
+# ─── Service NodePort-toewijzingen ────────────────────────────────────────────
+gitea_http_port: 30080
+gitea_ssh_port: 30022
+drone_port: 80
+argocd_port: 30082
+grafana_port: 30083
+semaphore_port: 30084
+alertmanager_port: 30085
+headlamp_port: 30086
+management_tool_port: 30087
+prometheus_port: 30090
+mailpit_smtp_port: 30025
+mailpit_web_port: 30026
+argocd_https_port: 30443
+prometheus_reloader_port: 30091
+alertmanager_reloader_port: 30092
+
+# ─── Alertmanager ─────────────────────────────────────────────────────────────
+alert_receiver_email: "admin@orangekuma.local"
+
+# ─── Gitea ────────────────────────────────────────────────────────────────────
+gitea_admin_user: gitea_admin
+gitea_admin_password: "OrangeKuma2025!"
+gitea_org: orange
+
+# ─── Semaphore repository ─────────────────────────────────────────────────────
+semaphore_repo_url: "https://github.com/cas-emmens/project-cloud.git"
+semaphore_repo_branch: "development"

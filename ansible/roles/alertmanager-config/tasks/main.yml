@@ -1,0 +1,64 @@
+---
+- name: Configure Alertmanager email routing via Mailpit
+  ansible.builtin.shell: |
+    kubectl -n monitoring create secret generic \
+      alertmanager-prometheus-kube-prometheus-alertmanager \
+      --from-literal=alertmanager.yaml='
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: "mailpit.mailpit.svc.cluster.local:1025"
+      smtp_from: "alertmanager@orangekuma.local"
+      smtp_require_tls: false
+    inhibit_rules:
+    - equal:
+      - namespace
+      - alertname
+      source_matchers:
+      - severity = critical
+      target_matchers:
+      - severity =~ warning|info
+    - equal:
+      - namespace
+      - alertname
+      source_matchers:
+      - severity = warning
+      target_matchers:
+      - severity = info
+    - equal:
+      - namespace
+      source_matchers:
+      - alertname = InfoInhibitor
+      target_matchers:
+      - severity = info
+    - target_matchers:
+      - alertname = InfoInhibitor
+    receivers:
+    - name: "null"
+    - name: email
+      email_configs:
+      - to: "{{ alert_receiver_email }}"
+    route:
+      group_by:
+      - namespace
+      group_interval: 5m
+      group_wait: 30s
+      receiver: email
+      repeat_interval: 12h
+      routes:
+      - matchers:
+        - alertname = "Watchdog"
+        receiver: email
+    templates:
+    - /etc/alertmanager/config/*.tmpl
+    ' \
+      --dry-run=client -o yaml | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  register: alertmanager_config
+  changed_when: "'configured' in alertmanager_config.stdout or 'created' in alertmanager_config.stdout"
+
+- name: Restart Alertmanager to pick up new config
+  ansible.builtin.shell: |
+    kubectl -n monitoring rollout restart \
+      statefulset/alertmanager-prometheus-kube-prometheus-alertmanager
+  changed_when: alertmanager_config.changed

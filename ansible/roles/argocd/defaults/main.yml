@@ -1,0 +1,5 @@
+---
+argocd_namespace: argocd
+argocd_chart_version: "7.6.12"
+argocd_reconciliation_interval: "30s"
+argocd_install_timeout: "10m"

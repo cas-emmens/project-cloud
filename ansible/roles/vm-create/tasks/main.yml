@@ -1,0 +1,89 @@
+---
+- name: Check if base image exists
+  ansible.builtin.stat:
+    path: "{{ base_image }}"
+  register: base_image_stat
+
+- name: Download Debian 12 cloud image
+  ansible.builtin.get_url:
+    url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+    dest: "{{ base_image }}"
+    mode: "0644"
+  when: not base_image_stat.stat.exists
+
+- name: Check if VM already exists
+  ansible.builtin.shell: "qm status {{ vm_id }} 2>/dev/null"
+  register: vm_exists
+  failed_when: false
+  changed_when: false
+
+- name: Skip if VM already exists
+  ansible.builtin.debug:
+    msg: "VM {{ vm_id }} ({{ vm_name }}) bestaat al, aanmaken overgeslagen"
+  when: vm_exists.rc == 0
+
+- name: Create VM from cloud-init image
+  when: vm_exists.rc != 0
+  block:
+    - name: Create the VM
+      ansible.builtin.shell: |
+        qm create {{ vm_id }} \
+          --name {{ vm_name }} \
+          --memory {{ vm_memory }} \
+          --cores {{ vm_cores }} \
+          --cpu cputype=host \
+          --net0 virtio,bridge={{ bridge }} \
+          --ostype l26 \
+          --scsihw virtio-scsi-single \
+          --agent enabled=1
+
+    - name: Import the disk from qcow2
+      ansible.builtin.shell: |
+        qm importdisk {{ vm_id }} {{ base_image }} {{ vm_storage }} --format raw
+
+    - name: Attach the imported disk as scsi0
+      ansible.builtin.shell: |
+        qm set {{ vm_id }} \
+          --scsi0 {{ vm_storage }}:vm-{{ vm_id }}-disk-0,iothread=1,discard=on
+
+    - name: Resize disk to {{ vm_disk_size }}
+      ansible.builtin.shell: |
+        qm resize {{ vm_id }} scsi0 {{ vm_disk_size }}
+
+    - name: Add cloud-init drive
+      ansible.builtin.shell: |
+        qm set {{ vm_id }} --ide2 {{ vm_storage }}:cloudinit
+
+    - name: Configure cloud-init settings
+      ansible.builtin.shell: |
+        qm set {{ vm_id }} \
+          --ipconfig0 ip={{ vm_ip }}/{{ netmask }},gw={{ gateway }} \
+          --nameserver {{ nameserver }} \
+          --sshkeys <(echo "{{ ssh_public_key }}") \
+          --ciuser debian \
+          --boot order=scsi0 \
+          --serial0 socket \
+          --vga serial0
+      args:
+        executable: /bin/bash
+
+    - name: Start the VM
+      ansible.builtin.shell: "qm start {{ vm_id }}"
+
+    - name: Wait for VM to be reachable via SSH
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 10
+        timeout: 180
+        state: started
+      delegate_to: localhost
+
+- name: Verify VM is running
+  ansible.builtin.shell: "qm status {{ vm_id }}"
+  register: vm_status
+  changed_when: false
+
+- name: Show VM status
+  ansible.builtin.debug:
+    msg: "{{ vm_name }} ({{ vm_id }}): {{ vm_status.stdout }}"

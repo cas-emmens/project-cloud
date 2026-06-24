@@ -47,9 +47,11 @@ The rubric awards bonus points for running Argo CD on Kubernetes. Since we need 
 - **GitOps** — Argo CD can manage all services, not just Orange Kuma.
 - **Rubric alignment** — "Zeer goed" for Deployment requires "Applicatie in containers."
 
-### Why local-path storage instead of Longhorn/Ceph?
+### Why Longhorn instead of Ceph?
 
-We initially planned Longhorn for distributed storage, but the Debian 12 cloud image doesn't include `open-iscsi` (a Longhorn dependency) and the minimal repos on the school network don't provide it. k3s ships with the `local-path` provisioner by default, which stores persistent volumes on the node's local disk. This is sufficient for our use case — we're not running a production HA database. Ceph was removed because it consumed too many resources (~7 GB RAM per node) for our limited hardware.
+The platform uses **Longhorn** for distributed storage. Longhorn replicates PersistentVolumes across nodes so a pod can restart on a different node after a node failure without losing data. It is installed via Helm in Phase 3 and requires `open-iscsi` on every node, which is available in the standard Debian 12 repository.
+
+Ceph was considered but removed — it consumes ~7 GB RAM per node, which exceeds the available headroom on the school hardware (23 GB per node, already partially used by k3s services).
 
 ### Why namespace isolation instead of node separation?
 
@@ -77,11 +79,11 @@ Each node: 2x Intel Xeon E5-2690 v4 @ 2.60GHz, 23 GB RAM, ~33 GB disk.
 | 301 | k3s-agent-1 | 10.24.36.11 | CE02 | Agent (worker) |
 | 302 | k3s-agent-2 | 10.24.36.12 | CE3 | Agent (worker) |
 
-Each VM: 2 vCPU, 16 GB RAM, 25 GB disk, Debian 12 (Bookworm) cloud-init image.
+Each VM: 2 vCPU, 16 GB RAM, 100 GB disk, Debian 12 (Bookworm) cloud-init image.
 
 ### Networking
 
-All VMs are bridged on `vmbr0` (subnet `10.24.36.0/24`, gateway `10.24.36.1`). The school gateway does NOT provide DNS resolution for VMs, so DNS is configured to use `8.8.8.8` directly. Services are exposed via Kubernetes NodePorts on the k3s-server IP (`10.24.36.10`).
+All VMs are bridged on `vmbr0` (subnet `10.24.36.0/24`, gateway `10.24.36.1`). The school gateway does NOT provide DNS resolution for VMs, so DNS is configured to use `1.1.1.1` directly. Services are exposed via Kubernetes NodePorts on the k3s-server IP (`10.24.36.10`).
 
 ---
 
@@ -106,8 +108,8 @@ VMs are created by the `playbooks/create-vms.yml` Ansible playbook. It runs agai
 1. `qm create` — creates the VM with 2 vCPU, 16 GB RAM, virtio NIC on vmbr0.
 2. `qm importdisk` — imports the Debian 12 qcow2 cloud image into local-lvm storage.
 3. `qm set` — attaches the disk, adds a cloud-init drive.
-4. Cloud-init configuration — sets static IP, gateway, DNS (`8.8.8.8`), SSH public key, and user (`debian`).
-5. `qm resize` — expands disk to 25 GB.
+4. Cloud-init configuration — sets static IP, gateway, DNS (`1.1.1.1`), SSH public key, and user (`debian`).
+5. `qm resize` — expands disk to 100 GB.
 6. `qm start` — boots the VM.
 7. Waits for SSH to become available (timeout 180s).
 
@@ -155,16 +157,26 @@ k3s ships with the `local-path` provisioner as the default StorageClass. All Per
 
 All services are deployed by `playbooks/bootstrap-platform.yml`. It installs Helm on the k3s server, creates namespaces, then deploys each service.
 
+### Longhorn (namespace: `longhorn-system`)
+
+Distributed block storage. Installed via the official Longhorn Helm chart before all other services. Replaces the k3s default `local-path` provisioner as the default StorageClass. Provides:
+
+- **Replication** — each PersistentVolume is replicated across nodes (default: 3 replicas), so a pod survives a node failure with its data intact.
+- **Volume expansion** — PVCs can be resized without recreating the pod.
+- **Web UI** — accessible via `kubectl port-forward` in the `longhorn-system` namespace.
+
+Requires `open-iscsi` installed and `iscsid` running on every node (handled by `install-k3s.yml`).
+
 ### Gitea (namespace: `gitea`)
 
-Repository manager. Installed via the official Gitea Helm chart. PostgreSQL is deployed as a sub-chart for the database. An admin account (`gitea_admin`) is created automatically. Webhooks are configured to allow all hosts (needed for Drone CI integration).
+Repository manager. Installed via the official Gitea Helm chart. SQLite is used as the database (the Bitnami PostgreSQL and Redis subchart images are no longer available on Docker Hub; SQLite is fully functional at this scale). An admin account (`gitea_admin`) is created automatically. Webhooks are configured to allow all hosts (needed for Drone CI integration).
 
 ### Drone CI (namespace: `drone`)
 
 Continuous integration. Deployed as raw Kubernetes manifests (not Helm, because the Drone Helm chart is unmaintained). Two components:
 
 - **Drone Server** — the web UI and API. Connected to Gitea via OAuth2 (the OAuth app is created automatically via the Gitea API during deployment).
-- **Drone Runner (Kube)** — executes pipelines as Kubernetes pods in the `drone` namespace. Has `cluster-admin` permissions to create pipeline pods.
+- **Drone Runner (Docker)** — executes pipelines using Docker-in-Docker (DinD) as a sidecar container. Builds run inside the runner pod itself rather than spawning new k8s pods.
 
 Drone secrets (Gitea OAuth client ID/secret, RPC secret) are stored in a Kubernetes Secret.
 
@@ -192,17 +204,26 @@ Full monitoring stack installed via the `kube-prometheus-stack` Helm chart. This
 
 - **Prometheus** — scrapes metrics from all k8s nodes, pods, and services. 7-day retention, 5 GB persistent storage.
 - **Grafana** — dashboards. Comes pre-configured with Kubernetes dashboards. 2 GB persistent storage.
-- **Alertmanager** — alert routing. 2 GB persistent storage.
+- **Alertmanager** — alert routing. 2 GB persistent storage. Configured to send all alerts (inclusief Watchdog als heartbeat) via email to `alert_receiver_email` (default: `admin@orangekuma.local`) through Mailpit.
 - **Node Exporter** — runs on every node, exports hardware/OS metrics.
 - **kube-state-metrics** — exports Kubernetes object metrics.
 
 This covers the "monitoring plus alerting" requirement for "Zeer goed."
 
+### Mailpit (namespace: `mailpit`)
+
+Lightweight mail catcher used as the Alertmanager SMTP backend. Catches all outgoing alert emails and displays them in a web UI — no real mail delivery, no external SMTP dependency. Deployed as a raw Kubernetes manifest.
+
+- **SMTP** — `mailpit.mailpit.svc.cluster.local:1025` (in-cluster), NodePort `30025` (external)
+- **Web UI** — NodePort `30026`
+
+The Alertmanager config is stored in the `alertmanager-prometheus-kube-prometheus-alertmanager` Secret and wired to Mailpit automatically during Phase 3.
+
 ### Semaphore (namespace: `semaphore`)
 
 Ansible UI for provisioning. This is the rubric-named tool through which the "verkoper" (and ops staff) create new customer instances — no CLI required. Deployed as a raw Kubernetes manifest with BoltDB (file-based database, no external DB needed). 1 GB persistent storage.
 
-Phase 4 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioning`, a repository pointing at the project-cloud Gitea repo, a `localhost` inventory, and **two templates** that share the single `provision-customer.yml` playbook:
+Phase 3 bootstraps Semaphore via its REST API: a project `Orange Kuma Provisioning`, a repository pointing at the project-cloud Gitea repo, a `localhost` inventory, and **two templates** that share the single `provision-customer.yml` playbook:
 
 - **"Nieuwe klant aanmaken"** (sales) — commits the rendered manifest to the `customer-instances` repo.
 - **"Testklant aanmaken"** (ops) — commits to the `test-customers` repo.
@@ -236,6 +257,7 @@ All services are accessible via NodePort on the k3s-server IP. You must be conne
 | **Grafana** | http://10.24.36.10:30083 | `admin` | `OrangeKuma2025!` |
 | **Semaphore** | http://10.24.36.10:30084 | `admin` | `OrangeKuma2025!` |
 | **Alertmanager** | http://10.24.36.10:30085 | — | (no auth) |
+| **Mailpit** | http://10.24.36.10:30026 | — | (no auth; mail catcher UI) |
 | **Headlamp** | http://10.24.36.10:30086 | — | (token auth, see below) |
 | **Management Tool** | http://10.24.36.10:30087 | — | (no auth; read-only dashboard) |
 | **Prometheus** | http://10.24.36.10:30090 | — | (no auth) |
@@ -278,23 +300,24 @@ In a production environment with more resources, this would be combined with ded
 The entire platform can be deployed from scratch with a single command:
 
 ```bash
-cd /root/k3s-platform
+cd /root/project-cloud
 export PROXMOX_PASSWORD="your-password"
-export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
-./deploy.sh
+./deploy.sh                              # Hanze cluster (default)
+./deploy.sh --inventory inventories/test # Test cluster
 ```
 
-Or to destroy everything and redeploy:
+The script auto-detects the SSH key from `~/.ssh/hanze_prox.pub`, `~/.ssh/id_ed25519.pub`, or `~/.ssh/id_rsa.pub` (in that order). To destroy everything and redeploy:
 
 ```bash
 ./deploy.sh --destroy-first
+./deploy.sh --inventory inventories/test --destroy-first
 ```
 
 The deploy script runs four phases:
 
 1. **Phase 1** (`create-vms.yml`) — Create 3 VMs on Proxmox with cloud-init.
-2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents.
-3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp).
+2. **Phase 2** (`install-k3s.yml`) — Install k3s server + join agents. Installs `open-iscsi` and `qemu-guest-agent` on all nodes.
+3. **Phase 3** (`bootstrap-platform.yml`) — Deploy all platform services via Helm and kubectl (Longhorn, Gitea, Drone, Argo CD + Image Updater, Prometheus/Grafana/Alertmanager, Mailpit, Semaphore + templates, Headlamp).
 4. **Phase 4** (`setup-cicd-pipeline.yml`) — Wire CI/CD + GitOps: Gitea org/repos, Drone pipelines, Argo CD AppProject + Applications, Image Updater config, the Semaphore provisioning project, and the Management Tool dashboard.
 
 You can also resume from a specific phase if an earlier phase already completed:
@@ -313,11 +336,7 @@ All playbooks are idempotent — running them again won't break anything.
 
 ### DNS resolution on VMs
 
-The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the `10.24.36.0/24` network. The Proxmox nodes themselves use `1.1.1.1`. We configured the VMs to use `8.8.8.8` via cloud-init and `systemd-resolved`. If DNS stops working after a reboot, check `/etc/resolv.conf` on the VMs.
-
-### Minimal Debian cloud image
-
-The `debian-12-generic-amd64.qcow2` image has very limited package repos. Packages like `open-iscsi`, `nfs-common`, and `apt-transport-https` are not available. This is why we use `local-path` storage instead of Longhorn. Only `curl` is installed as a prerequisite for k3s.
+The school gateway (`10.24.36.1`) does not provide DNS resolution for VMs on the `10.24.36.0/24` network. The Proxmox nodes themselves use `1.1.1.1`. We configured the VMs to use `1.1.1.1` via cloud-init. If DNS stops working after a reboot, check `/etc/resolv.conf` on the VMs.
 
 ### Semaphore service name conflict
 
@@ -466,27 +485,73 @@ project-cloud/
 ├── deploy.sh                              # One-command greenfield deployment (4 phases)
 ├── README.md                              # Quick-start guide
 ├── DOCUMENTATION.md                       # This file
+├── CHANGELOG.md                           # Branch-level change log
 ├── docs/
-│   └── auto-update-strategy.md            # Tiered auto-update policy (A–D)
+│   ├── auto-update-strategy.md            # Tiered auto-update policy (A–D)
+│   └── architecture.md                    # Infrastructure + flow diagrams
 ├── ansible/
 │   ├── ansible.cfg                        # Ansible configuration
-│   ├── inventory.yml                      # Proxmox + k3s hosts
 │   ├── group_vars/
-│   │   └── all.yml                        # IPs, ports, credentials (single source)
-│   ├── site.yml                           # Master playbook (all phases)
+│   │   └── all.yml                        # Gedeelde vars voor Semaphore (provision-customer.yml)
+│   ├── inventories/
+│   │   ├── hanze/
+│   │   │   ├── inventory.yml              # Hanze cluster (10.24.36.x)
+│   │   │   └── group_vars/all.yml         # Hanze-specifieke vars: IPs, poorten, semaphore branch
+│   │   ├── test/
+│   │   │   ├── inventory.yml              # Test cluster (10.24.35.x)
+│   │   │   └── group_vars/all.yml         # Test-specifieke vars: IPs, poorten, semaphore branch
+│   │   └── acc/
+│   │       ├── inventory.yml              # Acc cluster (10.24.39.x)
+│   │       └── group_vars/all.yml         # Acc-specifieke vars: IPs, poorten, semaphore branch
 │   ├── playbooks/
 │   │   ├── create-vms.yml                 # Phase 1: Create VMs on Proxmox
 │   │   ├── destroy-vms.yml                # Destroy all VMs (for redeploy)
 │   │   ├── install-k3s.yml                # Phase 2: Install k3s cluster
 │   │   ├── bootstrap-platform.yml         # Phase 3: Deploy platform services
 │   │   ├── setup-cicd-pipeline.yml        # Phase 4: CI/CD + GitOps + Semaphore + MT
+│   │   ├── setup-env.yml                  # Schrijf inventory vars naar /root/.env op control node
 │   │   ├── provision-customer.yml         # Shared backend for both Semaphore templates
 │   │   ├── provision-customer-management.yml  # Legacy (pre-GitOps), unused
 │   │   └── remove-customer.yml            # Remove a customer instance
+│   ├── roles/                             # Alle Ansible-rollen (één verantwoordelijkheid per rol)
+│   │   ├── setup-env/                     # Schrijf K3S_SERVER_IP naar /root/.env
+│   │   ├── vm-create/                     # Maak Proxmox VM aan (cloud-init)
+│   │   ├── node-prepare/                  # DNS, apt, open-iscsi, kernelmodules, sysctl
+│   │   ├── k3s-server/                    # Installeer k3s server, sla token + kubeconfig op
+│   │   ├── k3s-agent/                     # Voeg node toe aan cluster als agent
+│   │   ├── k3s-verify/                    # Verifieer dat alle nodes Ready zijn
+│   │   ├── helm/                          # Installeer Helm 3
+│   │   ├── longhorn/                      # Installeer Longhorn distributed storage
+│   │   ├── namespaces/                    # Maak alle platform-namespaces aan
+│   │   ├── gitea/                         # Installeer Gitea (Git + container registry)
+│   │   ├── drone/                         # Deploy Drone CI server + Docker runner
+│   │   ├── argocd/                        # Installeer Argo CD GitOps-controller
+│   │   ├── argocd-image-updater/          # Installeer Argo CD Image Updater
+│   │   ├── kube-prometheus-stack/         # Installeer Prometheus + Grafana + Alertmanager
+│   │   ├── mailpit/                       # Deploy Mailpit SMTP-catcher
+│   │   ├── alertmanager-config/           # Configureer Alertmanager → Mailpit routing
+│   │   ├── semaphore/                     # Deploy Semaphore + volledige API-bootstrap
+│   │   ├── headlamp/                      # Installeer Headlamp Kubernetes GUI
+│   │   ├── ingress-nginx/                 # Installeer ingress-nginx controller (HTTPS)
+│   │   ├── containerd-registry/           # Configureer insecure Gitea registry op alle nodes
+│   │   ├── gitea-repos/                   # Maak org, repos, GitOps-repos en tokens aan
+│   │   ├── drone-setup/                   # Koppel Drone aan Gitea, trigger builds
+│   │   ├── argocd-gitops/                 # Configureer Argo CD AppProject + Applications
+│   │   └── management-tool/               # Deploy Management Tool, mint ArgoCD token
 │   └── templates/
 │       └── customer-instance.yml.j2       # Rendered per-customer GitOps manifest
+├── tests/
+│   └── test-alertmanager.sh               # Test Alertmanager → Mailpit keten (inject + watchdog)
 └── k8s/
     └── management-tool/
-        ├── deployment.yml                 # MT dashboard: Deployment/Service/RBAC/ConfigMap
+        ├── deployment.yml.j2              # MT dashboard: Deployment/Service/RBAC/ConfigMap
         └── PIVOT-NOTES.md                 # Rationale for the read-only pivot
 ```
+
+### Group vars: twee lagen
+
+Er zijn twee niveaus van variabelen:
+
+- **`ansible/group_vars/all.yml`** — gedeelde platformvariabelen die via `vars_files` worden geladen door `provision-customer.yml` in Semaphore (Semaphore gebruikt geen inventory). Bevat alleen variabelen die relevant zijn voor klantenprovisioning (Gitea credentials, poorten). **Niet uitbreiden met bootstrap-only variabelen** — dit raakt Semaphore-driven workflows.
+
+- **`ansible/inventories/<env>/group_vars/all.yml`** — omgevingsspecifieke variabelen geladen via de inventory bij bootstrap en setup playbooks. Hier horen variabelen thuis als `k3s_server_ip`, Mailpit-poorten en `alert_receiver_email`.

@@ -1,11 +1,14 @@
 ---
-# group_vars/all.yml
-# Gedeelde platformvariabelen voor alle playbooks.
-# Dit is de enige plek waar IP-adressen, poorten en credentials worden gedefinieerd.
+# group_vars/all.yml — gedeelde platformvariabelen (identiek voor alle omgevingen)
+#
+# Omgevingsspecifieke variabelen (k3s_server_ip, domain_suffix, dns_servers,
+# semaphore_repo_branch) staan in inventories/<env>/group_vars/all.yml.
+#
+# Dit bestand wordt door provision-customer.yml geladen via vars_files,
+# omdat Semaphore geen inventory gebruikt.
 
-# ─── Infrastructuur ───────────────────────────────────────────────────────────
-k3s_server_ip: "10.24.36.10"
-domain_suffix: "10.24.36.10.nip.io"
+# ─── Ansible ──────────────────────────────────────────────────────────────────
+ansible_python_interpreter: auto_silent
 
 # ─── Service NodePort-toewijzingen ────────────────────────────────────────────
 gitea_http_port: 30080

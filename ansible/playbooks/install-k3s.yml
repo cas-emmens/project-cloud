@@ -1,227 +1,30 @@
 ---
 # playbooks/install-k3s.yml
-# Installs k3s server on the first node, then joins agents
+# Phase 2: Installeer k3s cluster
 #
-# Usage:
-#   ansible-playbook playbooks/install-k3s.yml
+# Gebruik:
+#   ansible-playbook playbooks/install-k3s.yml -i inventories/test
 
-- name: Prepare all k3s nodes
+- name: Bereid alle k3s nodes voor
   hosts: k3s_cluster
   become: true
-  tasks:
-    - name: Update apt cache
-      apt:
-        update_cache: yes
-        cache_valid_time: 3600
+  roles:
+    - node-prepare
 
-    - name: Install prerequisites
-      apt:
-        name:
-          - curl
-        state: present
-
-    - name: Load kernel modules for k3s
-      modprobe:
-        name: "{{ item }}"
-        state: present
-      loop:
-        - br_netfilter
-        - overlay
-        - ip_tables
-
-    - name: Persist kernel modules
-      copy:
-        content: |
-          br_netfilter
-          overlay
-          ip_tables
-        dest: /etc/modules-load.d/k3s.conf
-
-    - name: Set sysctl params for k3s
-      sysctl:
-        name: "{{ item.key }}"
-        value: "{{ item.value }}"
-        state: present
-        reload: yes
-        sysctl_file: /etc/sysctl.d/k3s.conf
-      loop:
-        - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
-        - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
-        - { key: "net.ipv4.ip_forward", value: "1" }
-
-    - name: Ensure systemd-resolved drop-in directory exists
-      ansible.builtin.file:
-        path: /etc/systemd/resolved.conf.d
-        state: directory
-        mode: "0755"
-
-    - name: Ensure fallback DNS is configured via systemd-resolved
-      ansible.builtin.copy:
-        dest: /etc/systemd/resolved.conf.d/fallback-dns.conf
-        content: |
-          [Resolve]
-          DNS=10.24.36.1 1.1.1.1
-          FallbackDNS=1.1.1.1 8.8.8.8
-        mode: "0644"
-      register: dns_config
-
-    - name: Restart systemd-resolved to apply DNS config
-      ansible.builtin.systemd:
-        name: systemd-resolved
-        state: restarted
-      when: dns_config.changed
-
-
-- name: Install k3s server
+- name: Installeer k3s server
   hosts: k3s_server
   become: true
-  tasks:
-    - name: Wait for network and DNS to be ready
-      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
-      register: internet_check
-      retries: 60
-      delay: 10
-      until: internet_check.rc == 0
-      changed_when: false
+  roles:
+    - k3s-server
 
-    - name: Check if k3s is already installed
-      stat:
-        path: /usr/local/bin/k3s
-      register: k3s_binary
-
-    - name: Install k3s server
-      shell: |
-        set -o pipefail
-        curl -sfL --ipv4 https://get.k3s.io | \
-          INSTALL_K3S_VERSION="{{ k3s_version }}" \
-          K3S_KUBECONFIG_MODE="644" \
-          sh -s - server \
-          --cluster-cidr={{ k3s_cluster_cidr }} \
-          --service-cidr={{ k3s_service_cidr }} \
-          --tls-san={{ k3s_server_ip }} \
-          --disable=traefik \
-          --write-kubeconfig-mode=644 \
-          --node-name=k3s-server
-      args:
-        executable: /bin/bash
-      when: not k3s_binary.stat.exists
-      register: k3s_server_install
-      failed_when:
-        - k3s_server_install.rc != 0
-        - "'D-Bus connection terminated' not in (k3s_server_install.stderr | default(''))"
-
-    - name: Wait for k3s to be ready
-      shell: |
-        until kubectl get nodes 2>/dev/null | grep -q "Ready"; do
-          sleep 2
-        done
-      timeout: 300
-      changed_when: false
-
-    - name: Get k3s node token
-      slurp:
-        src: /var/lib/rancher/k3s/server/node-token
-      register: k3s_token
-
-    - name: Store token as fact
-      set_fact:
-        k3s_node_token: "{{ k3s_token.content | b64decode | trim }}"
-
-    - name: Get kubeconfig
-      slurp:
-        src: /etc/rancher/k3s/k3s.yaml
-      register: kubeconfig_raw
-
-    - name: Save external kubeconfig locally
-      copy:
-        content: "{{ kubeconfig_raw.content | b64decode | replace('127.0.0.1', k3s_server_ip) }}"
-        dest: /tmp/kubeconfig-orange-kuma.yaml
-        mode: "0600"
-      delegate_to: localhost
-      become: false
-
-
-- name: Join k3s agents
+- name: Voeg k3s agents toe
   hosts: k3s_agents
   become: true
-  tasks:
-    - name: Get token from server
-      set_fact:
-        k3s_node_token: "{{ hostvars['k3s-server']['k3s_node_token'] }}"
+  roles:
+    - k3s-agent
 
-    - name: Wait for network and DNS to be ready
-      shell: curl -sf --ipv4 --max-time 10 https://get.k3s.io > /dev/null
-      register: internet_check
-      retries: 60
-      delay: 10
-      until: internet_check.rc == 0
-      changed_when: false
-
-    - name: Check if k3s is already installed
-      stat:
-        path: /usr/local/bin/k3s
-      register: k3s_binary
-
-    - name: Install k3s agent
-      shell: |
-        set -o pipefail
-        curl -sfL --ipv4 https://get.k3s.io | \
-          INSTALL_K3S_VERSION="{{ k3s_version }}" \
-          K3S_URL="https://{{ k3s_server_ip }}:6443" \
-          K3S_TOKEN="{{ k3s_node_token }}" \
-          sh -s - agent \
-          --node-name={{ inventory_hostname }}
-      args:
-        executable: /bin/bash
-      when: not k3s_binary.stat.exists
-      register: k3s_agent_install
-      failed_when:
-        - k3s_agent_install.rc != 0
-        - "'D-Bus connection terminated' not in (k3s_agent_install.stderr | default(''))"
-
-    - name: Remove stale known_hosts entry for k3s server
-      shell: "ssh-keygen -R {{ k3s_server_ip }} 2>/dev/null || true"
-      delegate_to: localhost
-      become: false
-      changed_when: false
-
-    - name: Wait for agent to join
-      shell: |
-        ssh -o StrictHostKeyChecking=accept-new debian@{{ k3s_server_ip }} "kubectl get nodes {{ inventory_hostname }} 2>/dev/null | grep -q Ready"
-      retries: 30
-      delay: 5
-      register: agent_joined
-      until: agent_joined.rc == 0
-      delegate_to: localhost
-      become: false
-
-
-- name: Verify cluster
+- name: Verifieer cluster
   hosts: k3s_server
   become: true
-  tasks:
-    - name: Show cluster nodes
-      shell: kubectl get nodes -o wide
-      register: cluster_nodes
-      changed_when: false
-
-    - name: Display cluster status
-      debug:
-        msg: "{{ cluster_nodes.stdout_lines }}"
-
-    - name: Verify all nodes are Ready
-      shell: |
-        TOTAL=$(kubectl get nodes --no-headers | wc -l)
-        READY=$(kubectl get nodes --no-headers | grep -c "Ready")
-        if [ "$TOTAL" -eq "$READY" ] && [ "$TOTAL" -eq 3 ]; then
-          echo "All 3 nodes are Ready"
-        else
-          echo "ERROR: Expected 3 ready nodes, got $READY/$TOTAL"
-          exit 1
-        fi
-      register: verify_result
-      changed_when: false
-
-    - name: Show verification
-      debug:
-        msg: "{{ verify_result.stdout }}"
+  roles:
+    - k3s-verify
