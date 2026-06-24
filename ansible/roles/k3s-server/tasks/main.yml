@@ -24,7 +24,9 @@
       --tls-san={{ k3s_server_ip }} \
       --disable=traefik \
       --write-kubeconfig-mode=644 \
-      --node-name=k3s-server
+      --node-name=k3s-server \
+      --kube-controller-manager-arg=bind-address=0.0.0.0 \
+      --kube-scheduler-arg=bind-address=0.0.0.0
   args:
     executable: /bin/bash
   when: not k3s_binary.stat.exists
