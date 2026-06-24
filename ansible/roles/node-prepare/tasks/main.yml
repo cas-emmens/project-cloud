@@ -1,4 +1,13 @@
 ---
+# On a freshly created VM, cloud-init and the apt-daily timer run apt-get
+# during first boot and hold /var/lib/dpkg/lock-frontend. Wait for cloud-init
+# to finish before we touch apt ourselves, otherwise the upgrade task below
+# fails instantly with "Unable to acquire the dpkg frontend lock".
+- name: Wait for cloud-init to finish on first boot
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+  failed_when: false
+
 - name: Verify DNS resolution
   ansible.builtin.command: getent hosts deb.debian.org
   changed_when: false
@@ -7,13 +16,24 @@
   register: dns_check
   until: dns_check.rc == 0
 
+# The apt tasks below retry on lock contention: even after cloud-init exits,
+# the apt-daily/unattended-upgrades timer can still hold the dpkg lock for a
+# short window. retries+until rides that out instead of aborting the play.
 - name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
+  register: apt_cache
+  until: apt_cache is succeeded
+  retries: 30
+  delay: 10
 
 - name: Upgrade all packages
   ansible.builtin.apt:
     upgrade: true
+  register: apt_upgrade
+  until: apt_upgrade is succeeded
+  retries: 30
+  delay: 10
 
 - name: Install prerequisites
   ansible.builtin.apt:
@@ -22,6 +42,10 @@
       - open-iscsi
       - qemu-guest-agent
     state: present
+  register: apt_prereqs
+  until: apt_prereqs is succeeded
+  retries: 30
+  delay: 10
 
 - name: Enable and start qemu-guest-agent
   ansible.builtin.systemd:
