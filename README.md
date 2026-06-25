@@ -11,6 +11,7 @@ Proxmox Cluster (3 nodes)
 └── CE3  (10.24.36.4) → k3s-agent-2 VM (10.24.36.12) - Worker
 
 k3s Cluster Services:
+├── Longhorn          - Distributed block storage (default StorageClass)
 ├── Gitea             - Git repos + container registry → :30080 (SSH :30022)
 ├── Drone CI          - Continuous integration         → :80 (LoadBalancer)
 ├── Argo CD           - Continuous deployment (GitOps) → :30082
@@ -21,6 +22,8 @@ k3s Cluster Services:
 ├── Headlamp          - Kubernetes web UI              → :30086
 ├── Management Tool   - Read-only customer dashboard    → :30087
 ├── Prometheus        - Metrics collection             → :30090
+├── Mailpit           - Mail catcher (Alertmanager SMTP backend) → :30026 (SMTP :30025)
+├── ingress-nginx     - Ingress controller (HTTPS)
 └── Orange Kuma       - Customer instances (per customer-<slug> namespace)
 ```
 
@@ -59,17 +62,23 @@ image automatically. See [`DOCUMENTATION.md`](DOCUMENTATION.md) and
 
 - Ansible installed on your local machine
 - SSH access to all 3 Proxmox nodes
-- `debian-12-generic-amd64.qcow2` image on all Proxmox nodes at `/var/lib/vz/template/iso/`
+- `PROXMOX_PASSWORD` set (or you'll be prompted for it)
+
+The `debian-12-generic-amd64.qcow2` base image is downloaded automatically by
+the `vm-create` role if it isn't already present on a Proxmox node (at
+`/var/lib/vz/template/iso/`).
 
 ## Quick Start
 
 ```bash
-# Set required environment variables
+# Required: the Proxmox root password (prompted if not exported)
 export PROXMOX_PASSWORD="your-proxmox-root-password"
-export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)"
 
-# Full greenfield deploy
+# Full greenfield deploy (default inventory: inventories/hanze)
 ./deploy.sh
+
+# Deploy to another cluster (inventories/test or inventories/acc)
+./deploy.sh --inventory inventories/test
 
 # Or destroy and redeploy
 ./deploy.sh --destroy-first
@@ -79,6 +88,10 @@ export SSH_PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)"
 ./deploy.sh --phase 3   # Skip VMs + k3s, just bootstrap platform services
 ./deploy.sh --phase 4   # Only (re)run the CI/CD + GitOps + Semaphore wiring
 ```
+
+`deploy.sh` auto-detects your SSH public key from `~/.ssh/hanze_prox.pub`,
+`~/.ssh/id_ed25519.pub`, or `~/.ssh/id_rsa.pub` (in that order); set
+`SSH_PUBLIC_KEY` explicitly to override.
 
 ## Retrieving login secrets after a deploy
 
@@ -104,7 +117,7 @@ kubectl -n kube-system get secret headlamp-admin-token \
 | `playbooks/create-vms.yml` | 1 | Create k3s VMs on Proxmox |
 | `playbooks/destroy-vms.yml` | — | Destroy all k3s VMs (for `--destroy-first`) |
 | `playbooks/install-k3s.yml` | 2 | Install k3s cluster |
-| `playbooks/bootstrap-platform.yml` | 3 | Install platform services (Gitea, Drone, Argo CD, Image Updater, Prometheus/Grafana, Semaphore + templates, Headlamp) |
+| `playbooks/bootstrap-platform.yml` | 3 | Install platform services (Longhorn, Gitea, Drone, Argo CD, Image Updater, Prometheus/Grafana/Alertmanager, Mailpit, Semaphore + templates, Headlamp, ingress-nginx) |
 | `playbooks/setup-cicd-pipeline.yml` | 4 | Wire CI/CD + GitOps: Gitea org/repos, Drone pipelines, Argo CD AppProject + Applications, Image Updater config, Management Tool |
 | `playbooks/provision-customer.yml` | — | Shared backend for both Semaphore templates; commits a customer manifest to a Gitea repo (GitOps). Run by Semaphore, or manually with `-e`. |
 | `playbooks/remove-customer.yml` | — | Remove a customer instance |
@@ -123,6 +136,7 @@ kubectl -n kube-system get secret headlamp-admin-token \
 | Argo CD | admin | (auto-generated, shown at end of deploy) |
 | Headlamp | (token auth) | (saved to /tmp/headlamp-token.txt) |
 | Management Tool | — | (no auth; read-only dashboard on :30087) |
+| Mailpit | — | (no auth; mail catcher UI on :30026) |
 
 Per-customer Orange Kuma admin credentials are set at provision time
 (`admin` / the password entered in the Semaphore form) and bootstrapped
@@ -130,7 +144,7 @@ into the instance automatically on first boot.
 
 ## VM Specs
 
-Each k3s VM: 2 vCPU, 16 GB RAM, 25 GB disk, Debian 12
+Each k3s VM: 2 vCPU, 16 GB RAM, 100 GB disk, Debian 12
 
 ## Security - Namespace Isolation
 

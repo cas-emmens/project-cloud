@@ -149,7 +149,7 @@ The two agent nodes join using the token from the server. The install script run
 
 ### Storage
 
-k3s ships with the `local-path` provisioner as the default StorageClass. All PersistentVolumeClaims use this. Data is stored locally on whichever node the pod runs on.
+k3s ships with the `local-path` provisioner, which remains the cluster's default StorageClass. Persistent storage for the platform is provided by **Longhorn** (installed in Phase 3, see [Section 7](#7-platform-services)): every stateful workload — platform services and customer instances alike — requests `storageClassName: longhorn` explicitly, so their data is replicated across nodes rather than pinned to one node's local disk. `local-path` stays as the default but is effectively unused, since nothing relies on the implicit class.
 
 ---
 
@@ -159,7 +159,7 @@ All services are deployed by `playbooks/bootstrap-platform.yml`. It installs Hel
 
 ### Longhorn (namespace: `longhorn-system`)
 
-Distributed block storage. Installed via the official Longhorn Helm chart before all other services. Replaces the k3s default `local-path` provisioner as the default StorageClass. Provides:
+Distributed block storage. Installed via the official Longhorn Helm chart before all other services. Longhorn is **not** made the default StorageClass — the role explicitly clears the default-class annotation so k3s's `local-path` stays the default — but every stateful workload requests `storageClassName: longhorn` by name. Provides:
 
 - **Replication** — each PersistentVolume is replicated across nodes (default: 3 replicas), so a pod survives a node failure with its data intact.
 - **Volume expansion** — PVCs can be resized without recreating the pod.
@@ -391,10 +391,11 @@ For each `customer-<slug>` namespace, `customer-instance.yml.j2` produces:
 
 - **Namespace** — labelled `app=orange-kuma`, `customer=<slug>`, `provisioned-by=<lane>`, annotated with `orange-kuma/customer-email`.
 - **Secret `kuma-admin`** — holds `UPTIME_KUMA_ADMIN_PASSWORD` for the instance's admin bootstrap.
-- **PersistentVolumeClaim `kuma-data`** — 1 Gi, `local-path` storage, mounted at `/app/data`.
+- **PersistentVolumeClaim `kuma-data`** — 1 Gi, `longhorn` storage, mounted at `/app/data`.
 - **Deployment `kuma`** — the Orange Kuma image from the Gitea registry, port 3001, with `CUSTOMER_NAME` / `CUSTOMER_EMAIL` / `CUSTOMER_DOMAIN` env and the admin password from the Secret.
-- **Service `kuma`** — ClusterIP on 3001 (an Ingress/NodePort can be layered on later).
-- **NetworkPolicy `deny-cross-customer`** — ingress isolation as described in [Section 9](#9-network-policies--security).
+- **Service `kuma`** — ClusterIP on 3001.
+- **Ingress `kuma`** — exposes the instance at `https://<slug>.<domain_suffix>` (e.g. `<slug>.10.24.36.10.nip.io`) through the ingress-nginx controller. `nip.io` resolves the host to the k3s-server IP, so no external DNS is needed; TLS is served with ingress-nginx's default self-signed certificate.
+- **NetworkPolicy `deny-cross-customer`** — ingress isolation as described in [Section 9](#9-network-policies--security). The "different `customer` label denied" rule still permits the ingress-nginx controller (a non-customer namespace) to reach the Service.
 
 ### Manual / CLI use
 
