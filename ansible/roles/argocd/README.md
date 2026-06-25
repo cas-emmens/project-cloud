@@ -31,6 +31,29 @@ Installeert Argo CD, een GitOps-controller die Kubernetes-resources automatisch 
 - `helm` is geïnstalleerd.
 - `namespaces` heeft de `argocd`-namespace aangemaakt.
 
+## Architectuurkeuzes
+
+### NodePort in plaats van Ingress
+
+ArgoCD is bereikbaar via NodePort `:30082` (HTTP) en `:30443` (HTTPS). Er is geen externe load balancer beschikbaar op bare-metal Proxmox, en ArgoCD's UI heeft specifiek redirect-gedrag dat soms botst met ingress-configuraties. NodePort is hier de eenvoudigste stabiele optie.
+
+### HTTP insecure mode
+
+ArgoCD draait zonder TLS op de pod zelf (`--insecure`, `server.insecure=true`). TLS wordt afgehandeld door ingress-nginx. Voor een gesloten schoolproject is dit een bewuste vereenvoudiging — in productie is TLS end-to-end aanbevolen.
+
+### Chartversie gepind
+
+De chartversie (`7.6.12`) is bewust vastgezet en wordt niet automatisch geüpdatet. Zie `docs/auto-update-strategy.md` voor de redenering (Tier C). Een versiebump is een expliciete commit na controle van de release notes.
+
+### Wat had anders gekund
+
+| Keuze | Alternatief | Trade-off |
+|---|---|---|
+| Polling 30s | Gitea webhook werkend maken (ROOT_URL aanpassen naar in-cluster adres) | Sneller en goedkoper, maar meer netwerkkennis vereist en lastiger te debuggen |
+| HTTP insecure | Cert-manager + self-signed cert op ArgoCD zelf | Meer veiligheid, maar extra complexiteit |
+| NodePort | ArgoCD achter ingress-nginx plaatsen | Consistentere setup, maar redirect-gedrag van ArgoCD botst soms met ingress |
+| Twee losse Applications | ApplicationSet met Git-generator | Schaalt beter (automatisch een Application per klant-directory), maar voegt conceptuele complexiteit toe |
+
 ## Opmerkingen
 
 - **Reconciliation 30s i.p.v. standaard 3 minuten.** Gitea's webhooks werken niet vanuit het cluster naar de Argo CD server (ROOT_URL mismatch bij in-cluster communicatie). Polling elke 30 seconden compenseert dit.

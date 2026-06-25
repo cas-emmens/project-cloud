@@ -37,12 +37,88 @@ Geen rolspecifieke defaults. Gebruikt `gitea_argocd_pat` (geregistreerd door `gi
 - `argocd` en `argocd-image-updater` draaien.
 - GitOps-repos bestaan in Gitea.
 
+## Koppeling met Gitea
+
+### Authenticatie — Personal Access Token
+
+De `gitea-repos` rol maakt een PAT aan via de Gitea API:
+
+```
+POST /api/v1/users/<admin>/tokens
+  naam:  "argocd-gitops"
+  scope: read:repository
+```
+
+Die token wordt als Ansible-fact doorgegeven (`gitea_argocd_pat.json.sha1`) en in deze rol in Kubernetes gezet als Secret-inhoud.
+
+### Repository Secrets
+
+ArgoCD herkent Secrets met het label `argocd.argoproj.io/secret-type: repository` automatisch als repo-credentials. Er worden twee zulke Secrets aangemaakt:
+
+```yaml
+stringData:
+  type: git
+  url: http://gitea-http.gitea.svc:3000/<org>/customer-instances.git
+  username: <gitea_admin_user>
+  password: <argocd-gitops PAT>
+```
+
+De URL is de **in-cluster DNS-naam** van de Gitea service (`gitea-http.gitea.svc:3000`), niet het externe IP. ArgoCD praat nooit via de NodePort naar buiten.
+
+### Polling in plaats van webhook
+
+ArgoCD pollt de Gitea Git-repo elke 30 seconden via gewone Git-fetch operaties. Webhooks van Gitea naar ArgoCD werken niet: Gitea stuurt webhooks naar z'n eigen `ROOT_URL` (extern adres), maar ArgoCD is alleen in-cluster bereikbaar. De twee komen niet overeen. Zie ook de `argocd` rol voor de reconciliation-interval instelling.
+
+### Image Updater — twee contactpunten naar Gitea
+
+De Image Updater heeft een afwijkende configuratie omdat hij zowel de registry API aanspreekt als terugschrijft naar Git:
+
+| Contactpunt | URL | Reden |
+|---|---|---|
+| Registry API (lezen) | `http://gitea-http.gitea.svc:3000` | In-cluster, geen NodePort nodig |
+| Registry prefix (images) | `<k3s_server_ip>:30080` | Extern adres, want containerd op de nodes gebruikt dit om images te pullen |
+| Git write-back | zelfde in-cluster URL | Commit nieuwe image-digest terug naar `customer-instances.git` |
+
+```
+[ArgoCD Image Updater]
+    │  pollt registry API: gitea-http.gitea.svc:3000
+    │  image prefix voor containerd: <extern IP>:30080
+    │  detecteert nieuwe digest
+    │  commit image-referentie terug naar customer-instances.git
+    ▼
+[ArgoCD detecteert nieuwe commit → sync → rolling update]
+```
+
 ## Hoe werkt de automatische image-update?
 
 1. Drone bouwt een nieuwe image en pusht die naar de Gitea registry (tag: git-SHA).
-2. De Image Updater detecteert de nieuwe digest.
+2. De Image Updater detecteert de nieuwe digest via de Gitea registry API.
 3. De Image Updater commit de nieuwe image-referentie in `customer-instances` (en/of `test-customers`).
-4. Argo CD detecteert de nieuwe commit en rolt de update uit naar alle klant-namespaces.
+4. Argo CD detecteert de nieuwe commit via polling en rolt de update uit naar alle klant-namespaces.
+
+Audit trail bij elke stap: Drone build log → Gitea registry tag history → Git commit op de manifest-repo → Argo CD sync history. Terugdraaien is een `git revert` op de manifest-commit; Argo CD reconcilieert automatisch terug naar het vorige image.
+
+## Volledig stroomschema
+
+```
+[ArgoCD application-controller]
+    │  elke 30s: git fetch
+    │  via: gitea-http.gitea.svc:3000 (in-cluster)
+    │  auth: argocd-gitops PAT (read:repository)
+    ▼
+[Gitea repo: customer-instances.git / test-customers.git]
+    │  customers/*.yaml
+
+[ArgoCD Image Updater]
+    │  pollt registry API: gitea-http.gitea.svc:3000
+    │  image prefix voor containerd: <extern IP>:30080
+    │  bij nieuwe digest: git commit + push naar customer-instances.git
+    │  auth: argocd-gitops PAT
+    ▼
+[ArgoCD detecteert nieuwe commit → sync → kubectl apply]
+    ▼
+[Kubernetes: customer-<naam> namespaces — draaiend op nieuwe image]
+```
 
 ## Opmerkingen
 
